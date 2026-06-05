@@ -1,0 +1,194 @@
+#include "dtrack/detection/mog_detector.hpp"
+
+#include <algorithm>
+#include <cmath>
+
+#include <opencv2/imgproc.hpp>
+
+namespace dtrack::detection {
+
+MogDetector::MogDetector(DetectorConfig cfg) : cfg_(cfg) {
+    mog_ = cv::createBackgroundSubtractorMOG2(cfg_.mog_history, cfg_.mog_var_threshold,
+                                              /*detectShadows=*/false);
+    const int k = cfg_.tophat_ksize;
+    tophat_kernel_ = cv::getStructuringElement(cv::MORPH_ELLIPSE, {k, k});
+    tophat_kernel_small_ = cv::getStructuringElement(cv::MORPH_ELLIPSE, {3, 3});
+    tophat_kernel_med_ = cv::getStructuringElement(cv::MORPH_ELLIPSE, {9, 9});
+    tophat_kernel_large_ = cv::getStructuringElement(cv::MORPH_ELLIPSE, {15, 15});
+    const int d = std::max(1, cfg_.fg_dilate);
+    fg_kernel_ = cv::getStructuringElement(cv::MORPH_ELLIPSE, {2 * d + 1, 2 * d + 1});
+}
+
+void MogDetector::reset() {
+    mog_ = cv::createBackgroundSubtractorMOG2(cfg_.mog_history, cfg_.mog_var_threshold,
+                                              false);
+    h_cum_ = cv::Matx33f::eye();
+    has_ref_ = false;
+    resets_ = 0;
+}
+
+void MogDetector::make_reference(const cv::Mat& gray) {
+    // Güncel kareyi yeni referans yap: kümülatif dönüşüm kimlik, model sıfırlanır.
+    h_cum_ = cv::Matx33f::eye();
+    ref_size_ = gray.size();
+    mog_->clear();
+    has_ref_ = true;
+}
+
+std::vector<common::Detection> MogDetector::detect(const common::StabilizedFrame& sf) {
+    std::vector<common::Detection> out;
+    if (!sf.frame || sf.frame->image.empty()) return out;
+    const cv::Mat& gray = sf.frame->image;
+
+    // --- 1) Kümülatif referans kaydını güncelle. ---
+    if (!has_ref_) {
+        make_reference(gray);
+    } else {
+        // curr->ref = (prev->ref) ∘ (curr->prev) = h_cum_ * H_inter.
+        h_cum_ = h_cum_ * sf.ego.homography;
+        const float tx = h_cum_(0, 2), ty = h_cum_(1, 2);
+        const double reset_lim =
+            cfg_.ref_reset_frac * std::min(ref_size_.width, ref_size_.height);
+        if (std::hypot(tx, ty) > reset_lim) {
+            make_reference(gray);
+            ++resets_;
+        }
+    }
+
+    // --- 2) Güncel kareyi referans koordinatına warp et (+ geçerli bölge maskesi). ---
+    cv::Matx23f M(h_cum_(0, 0), h_cum_(0, 1), h_cum_(0, 2), h_cum_(1, 0), h_cum_(1, 1),
+                  h_cum_(1, 2));
+    cv::Mat reg, valid;
+    cv::warpAffine(gray, reg, M, ref_size_, cv::INTER_LINEAR, cv::BORDER_CONSTANT, 0);
+    cv::warpAffine(cv::Mat(gray.size(), CV_8UC1, cv::Scalar(255)), valid, M, ref_size_,
+                   cv::INTER_NEAREST, cv::BORDER_CONSTANT, 0);
+
+    // --- 3) Top-hat (uzamsal saliency) — 4 ölçek: 3×3 + 5×5 + 9×9 + 15×15. ---
+    cv::Mat tophat;
+    cv::Mat tophat5;  // eşik hesabı için 5×5 referans
+    if (cfg_.multi_scale_tophat) {
+        cv::Mat th3, th5, th9, th15;
+        cv::morphologyEx(reg, th3, cv::MORPH_TOPHAT, tophat_kernel_small_);
+        cv::morphologyEx(reg, th5, cv::MORPH_TOPHAT, tophat_kernel_);
+        cv::morphologyEx(reg, th9, cv::MORPH_TOPHAT, tophat_kernel_med_);
+        cv::morphologyEx(reg, th15, cv::MORPH_TOPHAT, tophat_kernel_large_);
+        cv::Mat tmp = cv::max(th3, th5);
+        tmp = cv::max(tmp, th9);
+        tophat = cv::max(tmp, th15);
+        th5.copyTo(tophat5);
+    } else {
+        cv::morphologyEx(reg, tophat, cv::MORPH_TOPHAT, tophat_kernel_);
+        tophat.copyTo(tophat5);
+    }
+
+    // --- 3b) DoG — iki bant: küçük (uzak) + orta (yakın) hedef. ---
+    if (cfg_.use_dog) {
+        cv::Mat g1, g2, dog_small, dog_med, dog;
+        // Küçük bant (2-6 px)
+        cv::GaussianBlur(reg, g1, cv::Size(0, 0), cfg_.dog_sigma1);
+        cv::GaussianBlur(reg, g2, cv::Size(0, 0), cfg_.dog_sigma2);
+        dog_small = g1 - g2;
+        // Orta bant (5-15 px)
+        cv::GaussianBlur(reg, g1, cv::Size(0, 0), cfg_.dog_sigma1b);
+        cv::GaussianBlur(reg, g2, cv::Size(0, 0), cfg_.dog_sigma2b);
+        dog_med = g1 - g2;
+        // İki bandın maksimumu.
+        cv::max(dog_small, dog_med, dog);
+
+        double dog_max;
+        cv::minMaxLoc(dog, nullptr, &dog_max);
+        if (dog_max > 0) {
+            cv::Mat dog_norm;
+            dog.convertTo(dog_norm, CV_8U, 255.0 / dog_max);
+            double th_max;
+            cv::minMaxLoc(tophat5, nullptr, &th_max);
+            if (th_max > 0) {
+                const float scale = static_cast<float>(th_max / 255.0) * 0.5f;
+                cv::addWeighted(tophat, 1.0f, dog_norm, scale, 0, tophat, CV_8U);
+            }
+        }
+    }
+
+    // --- 4) MOG2 (zamansal hareket). ---
+    cv::Mat fg;
+    mog_->apply(reg, fg, cfg_.mog_learning_rate);
+    cv::dilate(fg, fg, fg_kernel_);
+
+    // --- 5) Eşik + birleştir: top-hat-parlak ∧ MOG2-hareketli ∧ geçerli. ---
+    // Eşik 5×5 top-hat'ın istatistiklerinden hesaplanır (daha kararlı, gürültü az).
+    // Çoklu ölçek maskesi (max) üzerinden uygulanır.
+    cv::Scalar mean, stddev;
+    cv::meanStdDev(tophat5, mean, stddev, valid);
+    const double thr =
+        std::max(mean[0] + cfg_.thresh_k * stddev[0], cfg_.thresh_min_abs);
+    cv::Mat th_mask;
+    cv::threshold(tophat, th_mask, thr, 255, cv::THRESH_BINARY);
+
+    cv::Mat combined;
+    cv::bitwise_and(th_mask, fg, combined);
+    cv::bitwise_and(combined, valid, combined);
+    // Tek-piksel gürültü çöpünü ele (3x3 açma); gerçek hedef bloku hayatta kalır.
+    static const cv::Mat open_k =
+        cv::getStructuringElement(cv::MORPH_ELLIPSE, {3, 3});
+    cv::morphologyEx(combined, combined, cv::MORPH_OPEN, open_k);
+
+    // --- 6) Bağlı bileşenler -> blob -> geometrik eleme -> alt-piksel centroid. ---
+    cv::Mat labels, stats, centroids;
+    const int n = cv::connectedComponentsWithStats(combined, labels, stats, centroids, 8);
+
+    const cv::Matx33f h_inv = h_cum_.inv();  // referans -> güncel (geri eşleme)
+
+    for (int lab = 1; lab < n; ++lab) {
+        const double area = stats.at<int>(lab, cv::CC_STAT_AREA);
+        if (area < cfg_.min_area || area > cfg_.max_area) continue;
+
+        const int bx = stats.at<int>(lab, cv::CC_STAT_LEFT);
+        const int by = stats.at<int>(lab, cv::CC_STAT_TOP);
+        const int bw = stats.at<int>(lab, cv::CC_STAT_WIDTH);
+        const int bh = stats.at<int>(lab, cv::CC_STAT_HEIGHT);
+        const float aspect =
+            static_cast<float>(std::max(bw, bh)) / std::max(1, std::min(bw, bh));
+        if (aspect > cfg_.max_aspect) continue;
+
+        // Top-hat yanıtıyla ağırlıklı alt-piksel centroid (referans koord).
+        double sw = 0, sx = 0, sy = 0;
+        float peak = 0;        // ham görüntü tepe parlaklığı
+        float peak_th = 0;     // top-hat tepe yanıtı (zayıf çöp elemesi için)
+        for (int y = by; y < by + bh; ++y) {
+            const int* lrow = labels.ptr<int>(y);
+            const uchar* trow = tophat.ptr<uchar>(y);
+            const uchar* rrow = reg.ptr<uchar>(y);
+            for (int x = bx; x < bx + bw; ++x) {
+                if (lrow[x] != lab) continue;
+                const double w = trow[x];
+                sw += w;
+                sx += w * x;
+                sy += w * y;
+                peak = std::max(peak, static_cast<float>(rrow[x]));
+                peak_th = std::max(peak_th, static_cast<float>(trow[x]));
+            }
+        }
+        if (sw <= 0) continue;
+        if (peak_th < cfg_.min_peak_tophat) continue;  // zayıf gürültü çöpü
+        const float rx = static_cast<float>(sx / sw);
+        const float ry = static_cast<float>(sy / sw);
+
+        // Referans -> güncel kare koordinatına geri eşle.
+        const cv::Vec3f p = h_inv * cv::Vec3f(rx, ry, 1.0f);
+        const float inv_w = (std::abs(p[2]) > 1e-6f) ? 1.0f / p[2] : 1.0f;
+
+        common::Detection d;
+        d.stamp = sf.frame->stamp;
+        d.modality = sf.frame->modality;
+        d.centroid = {p[0] * inv_w, p[1] * inv_w};
+        d.area_px = static_cast<float>(area);
+        d.aspect_ratio = aspect;
+        d.intensity = peak;
+        d.drone_score = 0.0f;  // skorlama Problem 3'te (IDiscriminator)
+        out.push_back(d);
+    }
+
+    return out;
+}
+
+}  // namespace dtrack::detection
