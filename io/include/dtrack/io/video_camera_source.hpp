@@ -21,6 +21,7 @@
 
 #include <opencv2/videoio.hpp>
 
+#include "dtrack/common/time.hpp"
 #include "dtrack/common/types.hpp"
 #include "dtrack/io/camera_source.hpp"
 
@@ -52,6 +53,14 @@ private:
 
     cv::VideoCapture cap_;
     std::uint64_t frame_index_{0};
+
+    // Çevrimdışı dosya işlemede zaman damgasını videonun KENDİ kare hızından
+    // türetiriz (kare_no / fps). Aksi halde okuma duvar-saatine bağlanır ve
+    // hızlı çevrimdışı işlemede dt ~ işlem süresi olur -> tracker zamanlaması
+    // bozulur. Canlı cihaz/akışta (use_media_time_=false) duvar-saati doğru.
+    common::Timestamp t0_{};      // ilk karenin referans anı
+    double media_fps_{0.0};       // CAP_PROP_FPS (geçerliyse > 0)
+    bool use_media_time_{false};  // dosya -> true, canlı cihaz/akış -> false
 };
 
 }  // namespace dtrack::io

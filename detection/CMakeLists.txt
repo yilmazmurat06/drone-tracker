@@ -1,6 +1,10 @@
-# dtrack_detection: top-hat + MOG2 küçük hedef tespiti.
+# dtrack_detection: küçük hedef tespiti.
+#   - mog_detector.cpp        : top-hat + MOG2 (gökyüzü, 2-6 px parlak nokta)
+#   - sky_region_detector.cpp : gökyüzü-kapılı hareket (arazi-üstü, belirgin hedef)
+#   - stability_discriminator.cpp : drone skorlama
 add_library(dtrack_detection STATIC
     src/mog_detector.cpp
+    src/sky_region_detector.cpp
     src/stability_discriminator.cpp)
 
 target_include_directories(dtrack_detection PUBLIC

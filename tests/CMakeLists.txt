@@ -35,6 +35,18 @@ if(OpenCV_FOUND)
         dtrack_fusion dtrack_tracking dtrack_detection dtrack_stabilization dtrack_io)
     add_test(NAME fusion COMMAND test_fusion)
 
+    # Track hiz (velocity) cikti dogrulugu + fps degismezligi regresyon testi.
+    add_executable(test_track_velocity test_track_velocity.cpp)
+    target_link_libraries(test_track_velocity PRIVATE
+        dtrack_tracking dtrack_detection dtrack_stabilization dtrack_io)
+    add_test(NAME track_velocity COMMAND test_track_velocity)
+
+    # IMM tracker: tek alpha-beta ile ayni sağlamlik çitasini tutturmali.
+    add_executable(test_imm_tracker test_imm_tracker.cpp)
+    target_link_libraries(test_imm_tracker PRIVATE
+        dtrack_tracking dtrack_detection dtrack_stabilization dtrack_io)
+    add_test(NAME imm_tracker COMMAND test_imm_tracker)
+
     add_executable(bench_pipeline bench_pipeline.cpp)
     target_link_libraries(bench_pipeline PRIVATE
         dtrack_tracking dtrack_detection dtrack_stabilization dtrack_io)

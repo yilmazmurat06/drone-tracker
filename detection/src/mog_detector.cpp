@@ -154,6 +154,8 @@ std::vector<common::Detection> MogDetector::detect(const common::StabilizedFrame
         double sw = 0, sx = 0, sy = 0;
         float peak = 0;        // ham görüntü tepe parlaklığı
         float peak_th = 0;     // top-hat tepe yanıtı (zayıf çöp elemesi için)
+        double inner_sum = 0;  // blob içi ham parlaklık toplamı (LCM iç bölgesi)
+        int inner_cnt = 0;
         for (int y = by; y < by + bh; ++y) {
             const int* lrow = labels.ptr<int>(y);
             const uchar* trow = tophat.ptr<uchar>(y);
@@ -166,12 +168,57 @@ std::vector<common::Detection> MogDetector::detect(const common::StabilizedFrame
                 sy += w * y;
                 peak = std::max(peak, static_cast<float>(rrow[x]));
                 peak_th = std::max(peak_th, static_cast<float>(trow[x]));
+                inner_sum += rrow[x];
+                ++inner_cnt;
             }
         }
         if (sw <= 0) continue;
         if (peak_th < cfg_.min_peak_tophat) continue;  // zayıf gürültü çöpü
         const float rx = static_cast<float>(sx / sw);
         const float ry = static_cast<float>(sy / sw);
+
+        // --- Yönlü yerel kontrast (LCM/WLDM) son-elemesi ---
+        if (cfg_.use_lcm && inner_cnt > 0) {
+            const float inner_mean = static_cast<float>(inner_sum / inner_cnt);
+            // Arka plan halkası yarıçapı: blob yarıçapı + boşluk.
+            const int R = std::max(bw, bh) / 2 + cfg_.lcm_gap_px;
+            const int p = cfg_.lcm_bg_patch;
+            // 8 yön: ilk 4 ile son 4 KARŞIT çiftler (dirs[k] ile dirs[k+4]).
+            static const int dirs[8][2] = {{1, 0},  {1, 1},  {0, 1},  {-1, 1},
+                                           {-1, 0}, {-1, -1}, {0, -1}, {1, -1}};
+            float bg[8];
+            for (int k = 0; k < 8; ++k) {
+                const int cx = static_cast<int>(std::lround(rx)) + dirs[k][0] * R;
+                const int cy = static_cast<int>(std::lround(ry)) + dirs[k][1] * R;
+                double s = 0;
+                int c = 0;
+                for (int yy = cy - p; yy <= cy + p; ++yy) {
+                    if (yy < 0 || yy >= reg.rows) continue;
+                    const uchar* rr = reg.ptr<uchar>(yy);
+                    for (int xx = cx - p; xx <= cx + p; ++xx) {
+                        if (xx < 0 || xx >= reg.cols) continue;
+                        s += rr[xx];
+                        ++c;
+                    }
+                }
+                bg[k] = c > 0 ? static_cast<float>(s / c) : 0.0f;
+            }
+            // Belirginlik (prominence) = iç_ort - komşuların ortalaması.
+            float bg_sum = 0;
+            for (float v : bg) bg_sum += v;
+            const float prominence = inner_mean - bg_sum / 8.0f;
+            // Yeterince belirgin değilse (dim/düşük-SNR) LCM uygulama -> recall korunur.
+            if (prominence >= cfg_.lcm_min_prominence) {
+                // Karşıt çiftlerden biri bile her iki ucta iç parlaklığın
+                // lcm_line_ratio katından parlaksa -> içinden çizgi/kenar geçiyor -> ele.
+                const float line_thr = inner_mean * cfg_.lcm_line_ratio;
+                bool is_line = false;
+                for (int k = 0; k < 4; ++k) {
+                    if (bg[k] >= line_thr && bg[k + 4] >= line_thr) { is_line = true; break; }
+                }
+                if (is_line) continue;
+            }
+        }
 
         // Referans -> güncel kare koordinatına geri eşle.
         const cv::Vec3f p = h_inv * cv::Vec3f(rx, ry, 1.0f);

@@ -64,6 +64,29 @@ struct DetectorConfig {
 
     // Referans sıfırlama: kümülatif öteleme min(W,H)*frac'i aşınca.
     double ref_reset_frac = 0.25;
+
+    // --- Yönlü yerel kontrast (LCM/WLDM) — eş-doğrusal kenar reddi ---
+    // IRST literatüründeki çok-yönlü Local Contrast Measure fikri. Aday merkezinden
+    // GEÇEN bir kenar/çizgi, KARŞILIKLI iki sektörü birden parlatır (yapı her iki
+    // yöne uzanır). Kompakt hedef (sönük olsa da) tüm yönlerde arka planla
+    // çevrilidir; tek-piksel gürültü yalnız BİR sektörü parlatır. Bir karşıt çiftin
+    // HER İKİ ucu da iç parlaklığın lcm_line_ratio katından parlaksa -> içinden çizgi
+    // geçiyor -> ele. reg (warp'lı gri) üzerinde, top-hat ∧ MOG2'den GEÇMİŞ adaylara.
+    //
+    // ÖNEMLİ — recall önceliği: varsayılan değerler RECALL-GÜVENLİdir (worst-case
+    // recall/continuity'yi koruyacak şekilde muhafazakâr). Sentetik sahnenin FP'leri
+    // İZOTROPİK doku tepeleridir (kenar değil) -> kontrast ölçüsüyle dim hedeften
+    // ayrılamazlar; bu yüzden sentetik benchmark'ta LCM neredeyse no-op'tur (bilinçli).
+    // Asıl faydası GERÇEK yapısal arka planda (bulut/ufuk/yer kenarları) görülür ve
+    // video_eval ile gerçek veride doğrulanmalıdır. Daha agresif ayar (lr↓, prom↓)
+    // precision'ı artırır AMA worst-case recall'dan verir (recall-önceliğine aykırı).
+    bool use_lcm = true;
+    int lcm_gap_px = 3;             // iç bölge ile arka plan halkası arası boşluk (px)
+    int lcm_bg_patch = 1;           // arka plan örneği yarı-pencere (1 -> 3×3)
+    float lcm_line_ratio = 0.90f;   // karşıt çift uçları iç_ort'un bu kadarından parlaksa = çizgi
+    // Belirginlik koruması: iç_ort komşu ortalamasından bu kadar (gri seviye) FAZLA
+    // değilse LCM hiç uygulanmaz (dim/düşük-SNR'da kontrast güvenilmez -> recall korunur).
+    float lcm_min_prominence = 10.0f;
 };
 
 class MogDetector : public IDetector {

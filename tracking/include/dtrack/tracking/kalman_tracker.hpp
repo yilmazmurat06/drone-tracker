@@ -31,11 +31,13 @@
 namespace dtrack::tracking {
 
 struct TrackerConfig {
-    // α-β kazançları. α = konum düzeltme (0..1), β = hız düzeltme (0..1).
-    // Büyük α -> hızlı konum yakınsama ama gürültülü.
-    // Büyük β -> hızlı hız adaptasyonu ama salınımlı.
+    // α-β kazançları (Kalata formülasyonu, dt-değişmez).
+    //   konum: x += α·innovation         (α boyutsuz, 0..1)
+    //   hız  : v += (β/dt)·innovation     (β boyutsuz; gerçek hız kazancı β/dt)
+    // Hız state'i px/SANİYE birimindedir (fps'ten bağımsız). Büyük α -> hızlı
+    // konum yakınsama ama gürültülü; büyük β -> hızlı hız adaptasyonu ama salınımlı.
     double alpha = 0.55;         // konum kazancı
-    double beta  = 0.12;         // hız kazancı
+    double beta  = 0.12;         // hız kazancı (boyutsuz; uygulanan = β/dt)
 
     // Öklid kapısı (piksel). Tespitin track tahmininden bu kadar uzaksa eşleşmez.
     // Temel yarıçap; coast süresiyle genişler (bkz. gate_expand_per_frame).
@@ -79,7 +81,7 @@ private:
     };
 
     void predict(TrackImpl& t, double dt) const;
-    void correct(TrackImpl& t, const common::Detection& z) const;
+    void correct(TrackImpl& t, const common::Detection& z, double dt) const;
     common::Track to_public(const TrackImpl& t, common::Timestamp stamp, double dt_pred) const;
 
     TrackerConfig cfg_;
