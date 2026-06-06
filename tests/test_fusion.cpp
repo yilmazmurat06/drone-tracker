@@ -56,8 +56,8 @@ int main() {
     detection::MogDetector det_vis;
     detection::MogDetector det_thm;
 
-    tracking::AlphaBetaTracker trk_vis;
-    tracking::AlphaBetaTracker trk_thm;
+    tracking::KalmanTracker trk_vis;
+    tracking::KalmanTracker trk_thm;
 
     fusion::SimpleTrackFusion fusion;
 

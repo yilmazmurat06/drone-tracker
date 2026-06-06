@@ -1,13 +1,10 @@
-// Tracking doğrulama testi (OpenCV gerekir).
+// AlphaBetaTracker (YEDEK tracker) doğrulama testi (OpenCV gerekir).
+//
+// Varsayılan artık KalmanTracker (bkz. test_tracker.cpp). Bu test, yedek α-β
+// filtresinin AYNI çıtayı tuttuğunu garanti eder; Kalman ile karşılaştırma temeli.
 //
 // Tam pipeline (kamera -> stabilize -> detect -> track) üzerinde:
-//   A) Kilit sürekliliği: onaydan sonra her karede hedefe yakın bir Confirmed/
-//      Coasting track var mı? (kesintisiz takip = sürekli kutu)
-//   B) Konum hatası ve kimlik kararlılığı (ID switch olmamalı).
-//   C) Boşluk köprüleme: tespit birkaç kare kesilse track coast edip kilidi korur mu?
-//
-// Tracker imge koordinatında takip eder (stabilizasyon ego'yu ~0.10px'e indirdiği
-// için koordinat sandviçine gerek kalmaz; referans sıfırlaması sorunu da olmaz).
+//   A) Kilit sürekliliği  B) Konum hatası + kimlik kararlılığı  C) Boşluk köprüleme.
 
 #include <cmath>
 #include <cstdio>
@@ -19,7 +16,7 @@
 #include "dtrack/io/synthetic_camera_source.hpp"
 #include "dtrack/io/synthetic_imu_source.hpp"
 #include "dtrack/stabilization/klt_gyro_stabilizer.hpp"
-#include "dtrack/tracking/kalman_tracker.hpp"
+#include "dtrack/tracking/alpha_beta_tracker.hpp"
 
 using namespace dtrack;
 
@@ -33,7 +30,7 @@ static int g_failures = 0;
     } while (0)
 
 int main() {
-    std::printf("test_tracking_lock_continuity\n");
+    std::printf("test_alpha_beta_lock_continuity (yedek tracker)\n");
     io::SceneConfig cfg;
     const auto t0 = common::now();
     io::SyntheticCameraSource cam(cfg, common::Modality::Visible, 60.0, t0, false);
@@ -45,19 +42,21 @@ int main() {
     scfg.focal_px = cfg.focal_px;
     stabilization::KltGyroStabilizer stab(scfg);
     detection::MogDetector det;
-    tracking::KalmanConfig tcfg;
-    tcfg.meas_noise_std = 1.5;        // σ_r (px)
-    tcfg.process_accel_std = 1500.0;  // σ_a (px/s²) -> kararlı-durum kazancı ≈ α-β
+    tracking::TrackerConfig tcfg;
+    tcfg.alpha = 0.55;
+    tcfg.beta  = 0.12;
+    tcfg.gate_px = 12.0;
+    tcfg.gate_expand_per_frame = 1.5;
     tcfg.confirm_hits = 3;
     tcfg.confirm_window = 8;
     tcfg.max_coast = 22;
     tcfg.tentative_max_miss = 2;
-    tracking::KalmanTracker tracker(tcfg);
+    tracking::AlphaBetaTracker tracker(tcfg);
 
     const int kFrames = 240;
-    const int kWarmup = 50;             // MOG2 + onay otursun (daha erken, tracker da arkasından)
+    const int kWarmup = 50;
     const double kMatchRadius = 6.0;
-    const int kGapStart = 185, kGapEnd = 189;  // 5 kare boşluk (daha gerçekçi)
+    const int kGapStart = 185, kGapEnd = 189;  // 5 kare boşluk
 
     int eval = 0, locked = 0, gap_locked = 0, gap_eval = 0;
     double sum_err = 0;
@@ -70,9 +69,8 @@ int main() {
         auto dets = det.detect(sf);
 
         const bool in_gap = (i >= kGapStart && i <= kGapEnd);
-        if (in_gap) dets.clear();  // tespit boşluğu simüle et
+        if (in_gap) dets.clear();
 
-        // İmge koordinatında doğrudan takip.
         auto tracks = tracker.update(dets, (*f)->stamp);
 
         if (i < kWarmup) continue;
@@ -92,24 +90,19 @@ int main() {
             if (in_gap) ++gap_locked;
         }
         if (in_gap) ++gap_eval;
-
-        if (i >= kWarmup && (i - kWarmup) % 20 == 0) {
-            std::printf("   i=%d dets=%zu tracks=%zu best=%.2f best_id=%u\n",
-                        i, dets.size(), tracks.size(), best, best_id);
-        }
     }
 
     const double continuity = static_cast<double>(locked) / eval;
     const double mean_err = locked ? sum_err / locked : -1;
     std::printf("   kare=%d  kilit surekliligi=%.2f  konum hatasi=%.2f px  "
-                "eslesengit ID sayisi=%zu  bosluk-kilit=%d/%d\n",
+                "ID sayisi=%zu  bosluk-kilit=%d/%d\n",
                 eval, continuity, mean_err, matched_ids.size(), gap_locked, gap_eval);
 
     CHECK(eval > 50);
-    CHECK(continuity > 0.95);          // kesintisiz kilit
-    CHECK(mean_err < 2.5);             // alt-piksel yakınlık
-    CHECK(matched_ids.size() <= 2);    // kimlik kararlı (ideal 1, tolerans 2)
-    CHECK(gap_locked > 0);               // boşluk başında kilit korunur, sonrasında iyileşir
+    CHECK(continuity > 0.95);
+    CHECK(mean_err < 2.5);
+    CHECK(matched_ids.size() <= 2);
+    CHECK(gap_locked > 0);
 
     if (g_failures == 0) {
         std::printf("TUM TESTLER GECTI\n");

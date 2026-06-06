@@ -1,4 +1,4 @@
-#include "dtrack/tracking/kalman_tracker.hpp"
+#include "dtrack/tracking/alpha_beta_tracker.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -7,7 +7,7 @@
 
 namespace dtrack::tracking {
 
-void KalmanTracker::reset() {
+void AlphaBetaTracker::reset() {
     tracks_.clear();
     next_id_ = 1;
     has_last_ = false;
@@ -15,18 +15,42 @@ void KalmanTracker::reset() {
     pending_age_ = 0;
 }
 
-common::Track KalmanTracker::to_public(const TrackImpl& t, common::Timestamp stamp,
-                                       double dt_pred) const {
+void AlphaBetaTracker::predict(TrackImpl& t, double dt) const {
+    // Sabit hız tahmini: p += v * dt.
+    const float d = static_cast<float>(dt);
+    t.x[0] += t.x[1] * d;
+    t.x[2] += t.x[3] * d;
+}
+
+void AlphaBetaTracker::correct(TrackImpl& t, const common::Detection& z, double dt) const {
+    // α-β düzeltmesi (Kalata): konum = tahmin + α·innovation,
+    //                          hız   = tahmin + (β/dt)·innovation.
+    // β/dt bölmesi sayesinde hız px/SANİYE biriminde kalır ve fps'ten bağımsız
+    // olur; predict (p += v·dt) ile birim olarak tutarlıdır.
+    const float innov_x = z.centroid.x - t.x[0];
+    const float innov_y = z.centroid.y - t.x[2];
+    const float a = static_cast<float>(cfg_.alpha);
+    const float b_dt = static_cast<float>(cfg_.beta / std::max(dt, 1e-3));
+    t.x[0] += a * innov_x;
+    t.x[1] += b_dt * innov_x;   // px/s
+    t.x[2] += a * innov_y;
+    t.x[3] += b_dt * innov_y;   // px/s
+    t.scale = z.area_px > 0 ? std::sqrt(z.area_px) : t.scale;
+    t.intensity = z.intensity;
+}
+
+common::Track AlphaBetaTracker::to_public(const TrackImpl& t, common::Timestamp stamp,
+                                          double dt_pred) const {
     common::Track o;
     o.id = t.id;
     o.stamp = stamp;
     o.status = t.status;
-    o.position = {static_cast<float>(t.kx.p), static_cast<float>(t.ky.p)};
-    // Hız state'i zaten px/s -> doğrudan dışarı ver.
-    o.velocity = {static_cast<float>(t.kx.v), static_cast<float>(t.ky.v)};
+    o.position = {t.x[0], t.x[2]};
+    // Hız state'i zaten px/s (Kalata β/dt formülasyonu) -> doğrudan dışarı ver.
+    o.velocity = {t.x[1], t.x[3]};
     // Bir kare ileri tahmin (kesişim için): p + v·dt.
-    o.predicted = {static_cast<float>(t.kx.p + t.kx.v * dt_pred),
-                   static_cast<float>(t.ky.p + t.ky.v * dt_pred)};
+    const float d = static_cast<float>(dt_pred);
+    o.predicted = {t.x[0] + t.x[1] * d, t.x[2] + t.x[3] * d};
     o.scale = t.scale;
     o.hits = t.hits;
     o.time_since_update = t.time_since_update;
@@ -36,7 +60,7 @@ common::Track KalmanTracker::to_public(const TrackImpl& t, common::Timestamp sta
     return o;
 }
 
-std::vector<common::Track> KalmanTracker::update(
+std::vector<common::Track> AlphaBetaTracker::update(
     const std::vector<common::Detection>& detections, common::Timestamp stamp) {
     double dt = 1.0 / 60.0;
     if (has_last_) {
@@ -47,27 +71,20 @@ std::vector<common::Track> KalmanTracker::update(
     last_stamp_ = stamp;
     has_last_ = true;
 
-    const double q = cfg_.process_accel_std * cfg_.process_accel_std;  // σ_a²
-    const double r = cfg_.meas_noise_std * cfg_.meas_noise_std;        // σ_r²
-
-    // --- 1) PREDICT (her iz, her eksen). ---
+    // --- 1) PREDICT. ---
     for (auto& t : tracks_) {
-        t.kx.predict(dt, q);
-        t.ky.predict(dt, q);
+        predict(t, dt);
         ++t.age;
         ++t.time_since_update;
         ++t.consecutive_miss;
     }
 
-    // --- 2+3) GATE (NIS/Mahalanobis) + öncelikli aç gözlü atama. ---
-    // NIS = (yx²/Sx) + (yy²/Sy), 2 serbestlik dereceli χ². Kapı = cfg_.gate_nis.
-    // Coast'ta P (dolayısıyla S) büyür -> aynı NIS daha geniş piksel kapısına denk
-    // gelir; α-β'deki elle "gate_expand_per_frame" gereksizdir.
+    // --- 2+3) GATE + greedy association (onaylıya öncelik, adaptive kapı). ---
     const size_t nt = tracks_.size(), nd = detections.size();
     std::vector<int> det_to_track(nd, -1);
     std::vector<bool> track_taken(nt, false);
 
-    struct Pair { double nis; int ti; int di; int prio; };
+    struct Pair { double dist; int ti; int di; int prio; };
     std::vector<Pair> pairs;
 
     for (size_t ti = 0; ti < nt; ++ti) {
@@ -75,18 +92,24 @@ std::vector<common::Track> KalmanTracker::update(
         int prio = 0;
         if (trk.status == common::TrackStatus::Confirmed) prio = 2;
         else if (trk.status == common::TrackStatus::Tentative) prio = 1;
+        // Adaptive kapı: coast süresiyle genişler.
+        const double gate = cfg_.gate_px + cfg_.gate_expand_per_frame * trk.time_since_update;
+        const double g2 = gate * gate;
         for (size_t di = 0; di < nd; ++di) {
-            const double nis = trk.kx.nis(detections[di].centroid.x, r) +
-                               trk.ky.nis(detections[di].centroid.y, r);
-            if (nis <= cfg_.gate_nis)
-                pairs.push_back({nis, (int)ti, (int)di, prio});
+            const double dx = trk.x[0] - detections[di].centroid.x;
+            const double dy = trk.x[2] - detections[di].centroid.y;
+            const double d2 = dx * dx + dy * dy;
+            if (d2 <= g2)
+                pairs.push_back({d2, (int)ti, (int)di, prio});
         }
     }
-    // Önce önceliğe göre (yüksek önce), eşitse NIS'e göre (küçük = iyi).
+    // Önce önceliğe göre, sonra mesafeye göre sırala (küçük = iyi).
+    // prio büyük = öncelikli, dist küçük = yakın. Skor = dist - prio*katsayı.
+    // Ama daha basit: önce prio'ya göre sırala, eşitse dist.
     std::sort(pairs.begin(), pairs.end(),
               [](const Pair& a, const Pair& b) {
-                  if (a.prio != b.prio) return a.prio > b.prio;
-                  return a.nis < b.nis;
+                  if (a.prio != b.prio) return a.prio > b.prio;  // yüksek öncelik önce
+                  return a.dist < b.dist;                         // yakın olan önce
               });
 
     for (const auto& p : pairs) {
@@ -95,16 +118,13 @@ std::vector<common::Track> KalmanTracker::update(
         det_to_track[p.di] = p.ti;
     }
 
-    // --- 4) UPDATE eşleşenler (Joseph); eşleşmeyen -> iki-nokta başlatma. ---
+    // --- 4) UPDATE eşleşenler; eşleşmeyen -> iki-nokta başlatma. ---
     const common::Detection* unmatched_z = nullptr;
     for (size_t di = 0; di < nd; ++di) {
         const int ti = det_to_track[di];
         if (ti >= 0) {
             auto& tr = tracks_[ti];
-            tr.kx.correct(detections[di].centroid.x, r);
-            tr.ky.correct(detections[di].centroid.y, r);
-            tr.scale = detections[di].area_px > 0 ? std::sqrt(detections[di].area_px) : tr.scale;
-            tr.intensity = detections[di].intensity;
+            correct(tr, detections[di], dt);
             ++tr.hits;
             tr.time_since_update = 0;
             tr.consecutive_miss = 0;
@@ -120,18 +140,16 @@ std::vector<common::Track> KalmanTracker::update(
         if (pending_init_) {
             const double dt_pend = common::millis_between(pending_init_->stamp, stamp) / 1000.0;
             if (dt_pend > 1e-3 && dt_pend < 0.5) {
-                const double inv = 1.0 / dt_pend;
-                const double vx = (unmatched_z->centroid.x - pending_init_->position.x) * inv;
-                const double vy = (unmatched_z->centroid.y - pending_init_->position.y) * inv;
-                const double speed = std::hypot(vx, vy);  // px/s
+                const float fps = static_cast<float>(1.0 / dt_pend);
+                const float vx = (unmatched_z->centroid.x - pending_init_->position.x) * fps;
+                const float vy = (unmatched_z->centroid.y - pending_init_->position.y) * fps;
+                const float speed = std::hypot(vx, vy);  // px/s
                 const bool sane = speed <= cfg_.max_init_speed;
-                const double pos_var = cfg_.init_pos_std * cfg_.init_pos_std;
-                const double vel_var = cfg_.init_vel_std * cfg_.init_vel_std;
                 TrackImpl t;
                 t.id = next_id_++;
-                // ÖLÇÜLÜ P0 (§2.7 salınımını önler): konum ~σ_r, hız ~init_vel_std.
-                t.kx.init(unmatched_z->centroid.x, sane ? vx : 0.0, pos_var, vel_var);
-                t.ky.init(unmatched_z->centroid.y, sane ? vy : 0.0, pos_var, vel_var);
+                // Hız doğrudan px/s saklanır (correct/predict ile tutarlı).
+                t.x = {unmatched_z->centroid.x, sane ? vx : 0.0f,
+                       unmatched_z->centroid.y, sane ? vy : 0.0f};
                 t.status = common::TrackStatus::Tentative;
                 t.hits = 1;
                 t.age = 1;

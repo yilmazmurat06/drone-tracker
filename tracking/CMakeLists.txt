@@ -1,8 +1,11 @@
 # dtrack_tracking: çoklu-hedef takip + M-of-N yaşam döngüsü.
-#   - kalman_tracker.cpp : α-β (Kalata) sabit-kazanç filtresi (varsayılan)
-#   - imm_tracker.cpp    : iki α-β modelli hafif IMM (yumuşak + çevik)
+#   - kalman_tracker.cpp     : GERÇEK 4-durumlu CV Kalman (varsayılan); kalman_core.hpp (Kf2)
+#   - alpha_beta_tracker.cpp : α-β (Kalata) sabit-kazanç filtresi (yedek/karşılaştırma)
+#   - imm_tracker.cpp        : iki Kalman modelli IMM (yumuşak + çevik)
+# Çekirdek matematik (Kf2) kalman_core.hpp'de, OpenCV'siz (tests/test_kalman_math.cpp ile sınanır).
 add_library(dtrack_tracking STATIC
     src/kalman_tracker.cpp
+    src/alpha_beta_tracker.cpp
     src/imm_tracker.cpp)
 
 target_include_directories(dtrack_tracking PUBLIC

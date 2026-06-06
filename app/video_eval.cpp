@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<detection::IDetector> det;
     if (detector == "sky") det = std::make_unique<detection::SkyRegionDetector>();
     else det = std::make_unique<detection::MogDetector>();
-    tracking::AlphaBetaTracker tracker;
+    tracking::KalmanTracker tracker;
     std::printf("  detektor        : %s\n", detector.c_str());
 
     cv::VideoWriter writer;  // --save verilirse annotasyonlu cikti

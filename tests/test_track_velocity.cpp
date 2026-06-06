@@ -52,7 +52,7 @@ static VelResult run_fps(double fps) {
     scfg.focal_px = cfg.focal_px;
     stabilization::KltGyroStabilizer stab(scfg);
     detection::MogDetector det;
-    tracking::AlphaBetaTracker trk;
+    tracking::KalmanTracker trk;
 
     double sum_rep = 0, sum_truth = 0;
     int n = 0;

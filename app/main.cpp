@@ -147,7 +147,8 @@ int main() {
     auto stab_vis = std::make_shared<stabilization::KltGyroStabilizer>(scfg);
     auto det_vis = std::make_shared<detection::MogDetector>();
     auto disc_vis = std::make_shared<detection::StabilityDiscriminator>();
-    auto trk_vis = std::make_shared<tracking::AlphaBetaTracker>();
+    // Takip: gerçek 4-durumlu CV Kalman (varsayılan). α-β yedek için hâlâ mevcut.
+    auto trk_vis = std::make_shared<tracking::KalmanTracker>();
 
     auto vfq = std::make_shared<common::SpscRingBuffer<common::FramePtr>>(8);
     auto vsq = std::make_shared<common::SpscRingBuffer<common::StabilizedFrame>>(8);
@@ -182,7 +183,7 @@ int main() {
     auto stab_thm = std::make_shared<stabilization::KltGyroStabilizer>(scfg);
     auto det_thm = std::make_shared<detection::MogDetector>();
     auto disc_thm = std::make_shared<detection::StabilityDiscriminator>();
-    auto trk_thm = std::make_shared<tracking::AlphaBetaTracker>();
+    auto trk_thm = std::make_shared<tracking::KalmanTracker>();
 
     auto tfq = std::make_shared<common::SpscRingBuffer<common::FramePtr>>(8);
     auto tsq = std::make_shared<common::SpscRingBuffer<common::StabilizedFrame>>(8);

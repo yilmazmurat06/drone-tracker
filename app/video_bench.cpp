@@ -7,6 +7,7 @@
 // Çıktı: <cikti_dizini>/<video_adi>_tracked.mp4 + PNG örnekleri.
 // 'q' veya ESC ile erken çıkış.
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -114,7 +115,7 @@ int main(int argc, char** argv) {
     stabilization::KltGyroStabilizer stab(scfg);
 
     detection::MogDetector det;
-    tracking::AlphaBetaTracker tracker;
+    tracking::KalmanTracker tracker;
 
     // Pencere.
     const std::string win = "Drone Tracker - " + base;

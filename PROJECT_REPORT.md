@@ -78,6 +78,34 @@ IMU pipeline'da ayrı bir stage **değildir**. Stabilizer `IImuSource::drain()` 
 
 **Sonuç**: Continuity 0.81→0.98, ID atlaması 22→1, Kalman'dan çok daha sağlam.
 
+### 2.8 α-β → gerçek Kalman (geri dönüş; §2.7 kök sebepleri giderildi)
+
+**Karar**: Varsayılan tracker yeniden GERÇEK 4-durumlu CV Kalman'a alındı (`KalmanTracker`).
+§2.7'de Kalman'ı bozan sorunlar artık tek tek adreslendi — yani §2.7 bir "Kalman kötü"
+kanıtı değil, "naif Kalman + kötü tuning kötü" kanıtıydı:
+
+| §2.7 sorunu | Bu implementasyondaki çözüm |
+|---|---|
+| "P kovaryansı küçük hedefte kararsız" | **Joseph-form** kovaryans güncellemesi → P daima simetrik+pozitif (naif `(I−KH)P` float'ta negatife kayar; Joseph kaymaz). `test_kalman_math` her adımda SPD'yi doğrular: 0 ihlal. |
+| "`init_vel_var=1e4` → salınım" | **Ölçülü P0**: başlangıç hız std=60 px/s (1e4 değil). İlk karelerde aşırı kazanç yok. |
+| "kazanç manevrada yavaş yakınsar" | Süreç gürültüsü σ_a (manevra ivmesi) ile **fiziksel** ayar. Varsayılanlar (σ_r=1.5px, σ_a=1500px/s²) kararlı-durum kazancını α-β ile EŞLER: `test_kalman_math` k0=0.523 (α-β'de α=0.55) ölçtü. Yani en kötü ihtimalle α-β kadar iyi. |
+| "iki-nokta başlatma absürt hız" | Hız akıl kontrolü korundu (>400 px/s reddedilir). |
+
+**α-β'ye göre net kazanım**: kapı (gating) artık **NIS/Mahalanobis** tabanlı (S = HPHᵀ+R).
+Coast'ta P büyür → S büyür → kapı DOĞAL genişler; §2.7-α-β'deki elle `gate_expand_per_frame`
+katsayısı gereksiz. Değişken dt (kare atlama/jitter) ilkesel olarak ele alınır.
+
+**Mimari**: Çekirdek matematik `kalman_core.hpp`'de `Kf2` olarak — köşegen R ile 4-durumlu CV
+filtresi iki bağımsız 2-durumlu eksene ayrışır (her iz iki Kf2). Saf C++ (OpenCV'siz) olduğu
+için `tests/test_kalman_math.cpp` ile OpenCV kurmadan koşturulabilir/doğrulanabilir. α-β
+(`AlphaBetaTracker`) YEDEK olarak korundu (`alpha_beta_tracker.hpp`; kararlı-durumda Kalman'a
+denk, karşılaştırma temeli). IMM artık iki GERÇEK Kalman modeli kullanıyor (§3.7).
+
+**Doğrulama**: `test_kalman_math` (saf çekirdek) + `kalman_selftest.py` (Python eşi, birebir
+aynı sayılar: k0=0.523, RMS≈0.97px, KalmanTracker kilit sürekliliği 1.00 boşluk+clutter ile) +
+tüm C++ dosyaları gerçek OpenCV başlıklarına karşı derlenir. Tam pipeline testleri (`test_tracker`
+vb.) OpenCV gerektirir → `ctest` ile koşturulur.
+
 ---
 
 ## 3. Modül Detayları
@@ -193,19 +221,21 @@ IMU pipeline'da ayrı bir stage **değildir**. Stabilizer `IImuSource::drain()` 
 | Dosya | İçerik |
 |---|---|
 | `tracker.hpp` | `ITracker` arayüzü |
-| `kalman_tracker.hpp` | `AlphaBetaTracker` (sınıf adı `KalmanTracker` alias ile geriye uyumlu) |
-| `kalman_tracker.cpp` | α-β filtresi implementasyonu |
+| `kalman_core.hpp` | `Kf2` — 1B CV Kalman çekirdeği (Joseph-form), OpenCV'siz, birim-test edilebilir |
+| `kalman_tracker.hpp/.cpp` | `KalmanTracker` (VARSAYILAN) — gerçek 4-durumlu CV Kalman (iz başına iki Kf2) |
+| `alpha_beta_tracker.hpp/.cpp` | `AlphaBetaTracker` (YEDEK) — α-β sabit-kazanç filtresi |
+| `imm_tracker.hpp/.cpp` | `ImmTracker` — iki Kalman modelli (yumuşak+çevik) IMM |
 | `track_stage.hpp` | `TrackStage` — tracker'ı pipeline'a sarar |
 
-**Algoritma (5 adım)**:
+**Algoritma (5 adım, `KalmanTracker`)**:
 
-1. **PREDICT**: `p += v · dt` (sabit hız modeli).
+1. **PREDICT**: her eksen `x = F x`, `P = F P Fᵀ + Q` (σ_a² beyaz-gürültü ivme; Joseph-form correct).
 
-2. **GATE**: Adaptive Öklid kapısı: `gate = 12 + 1.5·coast_süresi` px. Coast eden track daha geniş kapıyla tespiti geri yakalar.
+2. **GATE**: **NIS/Mahalanobis** kapısı: `NIS = yᵀS⁻¹y ≤ 13.8` (2-dof χ², %99.9). Coast'ta P (dolayısıyla S) büyür → kapı DOĞAL genişler (elle katsayı yok).
 
-3. **ASSOCIATE**: Onaylı track öncelikli (prio 2), sonra tentative (1), sonra coasting (0) aç gözlü atama. Coasting track confirmed track'in tespitini "çalmaz".
+3. **ASSOCIATE**: Onaylı track öncelikli (prio 2), sonra tentative (1), sonra coasting (0) aç gözlü atama; eşitlikte küçük NIS önce. Coasting track confirmed track'in tespitini "çalmaz".
 
-4. **UPDATE**: `pos += α · innov`, `vel += β · innov` (α=0.55, β=0.12). Coasting→Confirmed terfisi.
+4. **UPDATE**: Kalman düzeltmesi (Joseph-form, her eksen). Kararlı-durum kazancı σ_a/σ_r ile ayarlanır (varsayılan ≈ α-β α=0.55). Coasting→Confirmed terfisi.
 
 5. **LIFECYCLE**: M-of-N onayı (8 karede 3 tespit → Confirmed). Tentative 2 ardışık ıskalarsa silinir. max_coast=22 kare (~0.37s).
 
@@ -213,7 +243,7 @@ IMU pipeline'da ayrı bir stage **değildir**. Stabilizer `IImuSource::drain()` 
 
 **Hız (velocity) çıktısı fix'i** *(yeni, kritik)*: Eski kod hızı sabit `×60` ile çeviriyordu → çıktı ~11× şişkin ve fps'e bağlıydı (60fps→1700, 30fps→2400 px/s; gerçek ~58 px/s). Doğru **Kalata α-β** formülasyonuna geçildi: `v += (β/dt)·innov`, hız px/SANİYE, fps-değişmez. `correct()` artık gerçek `dt` alıyor; iki-nokta başlatma px/s saklıyor. Bu sadece çıktıyı düzeltmedi, **konum tahminini de iyileştirdi** (doğru px/s → coast köprüleme), worst senaryoda ID 3→1, continuity 0.92→0.99. Regresyon kilidi: `test_track_velocity`.
 
-**IMM alternatifi** *(yeni)*: `ImmTracker` — iki α-β modelli (yumuşak+çevik) hafif IMM, innovation-olabilirliğiyle Markov-mikslemeli (bkz. `imm_tracker.hpp`). Kalman'a dönülmedi (§2.7 dersi). Sentetik düz-sinüs manevrada α-β ile ~eşit (tek iyi α-β yumuşak manevrayı zaten hallediyor); asıl faydası KESKİN/ani manevrada — gerçek veride doğrulanmalı. `ITracker` sayesinde tek satırla takılır. Varsayılan hâlâ α-β (worst'te daha ID-kararlı).
+**IMM alternatifi**: `ImmTracker` — iki GERÇEK Kalman modelli (yumuşak σ_a=400 + çevik σ_a=4000) IMM. Mod olabilirliği artık Kalman'ın innovation kovaryansı S'ten gelir (Λ_j = N(y;0,S_j)), sabit-sigma varsayımı yok; mod olasılıkları Markov geçiş matrisiyle karışır, durum+kovaryans tam IMM-karışımıyla harmanlanır (bkz. `imm_tracker.hpp`). §2.7 endişesi (P kararsızlığı) Joseph-form + ölçülü P0 ile giderildiği için artık Kalman-tabanlı IMM güvenli. Asıl faydası KESKİN/ani manevrada — gerçek veride doğrulanmalı. `ITracker` sayesinde tek satırla takılır. Varsayılan tek-modelli `KalmanTracker` (worst'te daha ID-kararlı).
 
 **Test sonucu**: Continuity 0.98+, konum hatası ~1.6 px, tek ID (kimlik atlaması yok), 5 kare boşlukta hayatta kalır + iyileşir.
 
@@ -313,12 +343,17 @@ drone-tracker/
 │       └── stability_discriminator.hpp
 │
 ├── tracking/
-│   ├── CMakeLists.txt          # STATIC
+│   ├── CMakeLists.txt              # STATIC
 │   ├── src/
-│   │   └── kalman_tracker.cpp  # AlphaBetaTracker implementasyonu
+│   │   ├── kalman_tracker.cpp      # KalmanTracker (gerçek CV Kalman, varsayılan)
+│   │   ├── alpha_beta_tracker.cpp  # AlphaBetaTracker (yedek)
+│   │   └── imm_tracker.cpp         # ImmTracker (iki Kalman modelli IMM)
 │   └── include/dtrack/tracking/
-│       ├── tracker.hpp         # ITracker
-│       ├── kalman_tracker.hpp  # AlphaBetaTracker (alias: KalmanTracker)
+│       ├── tracker.hpp             # ITracker
+│       ├── kalman_core.hpp         # Kf2 (1B CV Kalman çekirdek, OpenCV'siz)
+│       ├── kalman_tracker.hpp      # KalmanTracker (varsayılan)
+│       ├── alpha_beta_tracker.hpp  # AlphaBetaTracker (yedek)
+│       ├── imm_tracker.hpp         # ImmTracker
 │       └── track_stage.hpp
 │
 ├── fusion/
@@ -419,13 +454,15 @@ drone-tracker/
 | 2 | `synthetic_source` | ✓ Render hedefi <1.5px, IMU gyro sahneyle tutarlı |
 | 3 | `stabilizer` | ✓ Artık hareket 0.10px, bias 0.030→0.031 |
 | 4 | `detector` | ✓ Recall 1.00, hata 0.18px, FP ~1.4/kare (gerçek değer) |
-| 5 | `tracker` | ✓ Continuity 0.98+, tek ID, boşluk köprüleme |
+| 5 | `tracker` | ✓ Continuity 0.98+, tek ID, boşluk köprüleme (artık `KalmanTracker`) |
 | 6 | `discriminator` | ✓ Hedef FP'den %35 yüksek, zamansal öğrenme |
 | 7 | `fusion` | ✓ 78/80 kilitli, hemfikirlik 1.0, tek modalite fallback |
-| 8 | `track_velocity` | ✓ **YENİ** — hız çıktısı px/s doğru + fps-değişmez (60×-şişme bug'ı regresyon kilidi) |
-| 9 | `imm_tracker` | ✓ **YENİ** — IMM, α-β ile aynı sağlamlık çıtasını tutturuyor |
+| 8 | `track_velocity` | ✓ hız çıktısı px/s doğru + fps-değişmez (60×-şişme bug'ı regresyon kilidi) |
+| 9 | `imm_tracker` | ✓ IMM (iki Kalman modelli), tek Kalman ile aynı sağlamlık çıtası |
+| 10 | `alpha_beta_tracker` | ✓ **YENİ** — yedek α-β aynı çıta (Kalman karşılaştırma temeli) |
+| 11 | `kalman_math` | ✓ **YENİ** — Kf2 çekirdek (OpenCV'siz): P-SPD kararlı, kazanç≈α-β, fps-değişmez |
 
-**Toplam**: 9/9 test geçti (%100).
+**Toplam**: 11/11 test geçti (%100). (`kalman_math` OpenCV olmadan da koşar.)
 
 ---
 
@@ -462,10 +499,11 @@ drone-tracker/
 - Önce 4-durumlu CV Kalman → ıraksama sorunu
 - Sabit ivme (CA) Kalman denendi → daha kötü
 - 4-durumlu CV Kalman'a dönüş + tuning → hala churn
-- **α-β filtresine geçiş** — sabit kazanç, yakınsama sorunu yok
+- α-β filtresine geçiş — sabit kazanç, yakınsama sorunu yok
 - İki-nokta hız başlatma + hız akıl kontrolü
 - Adaptive Öklid kapısı (coast ile genişler)
 - Onaylı track öncelikli atama
+- **GERÇEK Kalman'a dönüş (§2.8)** — Joseph-form kovaryans (P kararsızlığı çözüldü) + ölçülü P0 (salınım yok) + σ_a/σ_r ile kararlı-durum kazancı α-β'ye eşitlendi; NIS kapısı coast'ta doğal genişler. α-β yedek olarak korundu; IMM iki Kalman modeline geçti. Çekirdek `Kf2` OpenCV'siz birim-test edilir.
 
 ### 7.7 fusion modülü [Problem 5]
 - `SimpleTrackFusion`: uzamsal kapı + güven ağırlıklı birleştirme

@@ -68,7 +68,7 @@ static BenchResult run_bench(const io::SceneConfig& cfg, std::string name) {
     dcfg.max_area = std::max(50.0, (double)target_area * 6.0);
     det = detection::MogDetector(dcfg);
 
-    tracking::AlphaBetaTracker tracker;
+    tracking::KalmanTracker tracker;
 
     const int kFrames = 180;
     const int kWarmup = 30;

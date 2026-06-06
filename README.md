@@ -77,13 +77,16 @@ sudo apt install libopencv-dev   # Ubuntu
   - [x] `StabilityDiscriminator` — uzamsal yakınlık + yaş ağırlıklı geçmiş eşleme
   - [x] Geometrik skor (alan, en/boy, parlaklık) + zamansal varlık + özellik kararlılığı
   - [x] Test: hedef skoru FP'den %35 yüksek, zamansal kararlılıkla artar
-- [x] tracking: α-β çoklu-hedef takip + M-of-N yaşam döngüsü
-  - [x] `AlphaBetaTracker` — α-β filtresi (fixed-gain, Kalman'a göre manevrada daha sağlam)
-  - [x] İki-nokta hız başlatma (hız akıl kontrollü) + Öklid kapısı (adaptive: coast ile genişler)
+- [x] tracking: Kalman/IMM çoklu-hedef takip + M-of-N yaşam döngüsü
+  - [x] `KalmanTracker` (VARSAYILAN) — gerçek 4-durumlu CV Kalman (iz başına iki `Kf2`):
+        Joseph-form kovaryans (sayısal kararlı) + σ_a/σ_r ile ayarlı kazanç (≈α-β) + NIS kapısı
+  - [x] `AlphaBetaTracker` (YEDEK) — α-β sabit-kazanç filtresi (kararlı-durumda Kalman'a denk)
+  - [x] `ImmTracker` — iki Kalman modelli (yumuşak+çevik) IMM, S-tabanlı mod olabilirliği
+  - [x] İki-nokta hız başlatma (hız akıl kontrollü) + NIS/Mahalanobis kapısı (coast'ta doğal genişler)
   - [x] Onaylı track öncelikli aç gözlü atama (coasting track "çalmasın" diye)
   - [x] `TrackStage` + `TrackVizSink` (kutu + iz + video) + demo `camera→stab→detect→track→viz`
-  - [x] Test: continuity=0.98 (kesintisiz kilit), konum hatası=1.70px, tek ID (kimlik atlaması yok),
-        boşluk köprüleme (5 kare tespitsiz hayatta kalır + iyileşir)
+  - [x] Test: continuity=0.98 (kesintisiz kilit), konum hatası≈1.7px, tek ID, boşluk köprüleme.
+        Çekirdek `Kf2` OpenCV'siz `test_kalman_math` ile doğrulanır (P-SPD kararlı, kazanç≈α-β)
 - [x] fusion: track-seviyesi (geç) füzyon
   - [x] `SimpleTrackFusion` — uzamsal kapı + aç gözlü atama + güven ağırlıklı birleştirme
   - [x] Hemfikirlik bonusu (C_fused = C_v + C_t - C_v*C_t), tek modalite cezası (×0.7)
