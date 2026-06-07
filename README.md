@@ -28,12 +28,21 @@ tests/          Birim testleri
 
 ```
 [capture] → [stabilize] → [detect+score] → [track] → [fuse] → [output]
-          ↑ lock-free SPSC ring buffer her ok'ta ↑
-[IMU] ────┘ (stabilize'a)
+          ↑ lock-free SPSC ring buffer her ok'ta ↑       │
+[IMU] ────┘ (stabilize'a)                                 │ cue (track→detect)
+          └───────────── kapalı-döngü geri besleme ◄──────┘
 ```
 
-Her ok, tek-üretici-tek-tüketici (SPSC) lock-free ring buffer. Stage'ler örtüşür
+Her ileri ok, tek-üretici-tek-tüketici (SPSC) lock-free ring buffer. Stage'ler örtüşür
 (tracker N'de iken detector N+1'de) → throughput frame hızına yetişir.
+
+**Kapalı-döngü (cued tracking):** Hedefe KİLİTLENDİKTEN sonra tracker, hedefin bir
+sonraki kare için tahminini (Kalman ileri tahmini) küçük bir **CueBoard** yan kanalıyla
+(seqlock, lock-free) detektöre geri verir. Global tespit o karede hedefi kaçırırsa
+(düşük SNR / hover), detektör tahmin etrafındaki ROI'de düşük eşikle (track-before-detect)
+hedefi **kurtarır** → kilit kesilmez. Bu IRST (Infrared Search & Track) literatüründeki
+"Kalman-tahminli ROI + kayıp telafisi" yaklaşımıdır. Sentetik worst-case'de recall
+**0.84 → 1.00**, coast oranı **%10 → %0** (bkz. `bench_pipeline` A/B).
 
 ## Derleme
 
@@ -71,8 +80,11 @@ sudo apt install libopencv-dev   # Ubuntu
   - [x] `MogDetector` — çoklu ölçek top-hat (3×3 + 5×5) + DoG ⊕ MOG2 + kümülatif referans
         kaydı (referans sıfırlamalı), alt-piksel ağırlıklı centroid, geometrik eleme
   - [x] `DetectStage` + demo `camera→stabilize→detect→sink`
-  - [x] Test: recall=1.00, konum hatası 0.11px, yanlış pozitif 0.27/kare
-  - [x] Benchmark: 15 senaryo, 14/15 recall≥0.79, 14/15 continuity≥0.67 (bkz. bench_pipeline)
+  - [x] Test: recall=1.00, konum hatası 0.18px (gerçek değer)
+  - [x] **Kapalı-döngü cued ROI kurtarma** (track-before-detect-lite): tracker tahmini
+        ROI'sinde düşük eşik + MOG2-AND'siz tek tepe → düşük-SNR/hover'da kilit korunur
+  - [x] Benchmark: 17 senaryo, hız-fix+cued sonrası **17/17 recall=1.00 & continuity=1.00**
+        (worst 0.84→1.00, coast %10→%0; bkz. bench_pipeline A/B)
 - [x] detection: drone skorlama (IDiscriminator, Problem 3)
   - [x] `StabilityDiscriminator` — uzamsal yakınlık + yaş ağırlıklı geçmiş eşleme
   - [x] Geometrik skor (alan, en/boy, parlaklık) + zamansal varlık + özellik kararlılığı
@@ -83,7 +95,11 @@ sudo apt install libopencv-dev   # Ubuntu
   - [x] `AlphaBetaTracker` (YEDEK) — α-β sabit-kazanç filtresi (kararlı-durumda Kalman'a denk)
   - [x] `ImmTracker` — iki Kalman modelli (yumuşak+çevik) IMM, S-tabanlı mod olabilirliği
   - [x] İki-nokta hız başlatma (hız akıl kontrollü) + NIS/Mahalanobis kapısı (coast'ta doğal genişler)
-  - [x] Onaylı track öncelikli aç gözlü atama (coasting track "çalmasın" diye)
+  - [x] **PDAF** (Probabilistic Data Association, VARSAYILAN): yerleşik izler için kapı içi
+        tüm adayları olabilirliğe göre ağırlıklandıran Bayesçi yumuşak ilişkilendirme +
+        spread-of-innovations kovaryans. Clutter'da ID kararlılığı (test: NN 5 ID → PDAF 1 ID)
+  - [x] Per-tespit ölçüm gürültüsü R ipucu (kapalı-döngü kurtarma ölçümü az güvenle işlenir)
+  - [x] Onaylı track öncelikli aç gözlü atama (NN yedek yol; coasting track "çalmasın" diye)
   - [x] `TrackStage` + `TrackVizSink` (kutu + iz + video) + demo `camera→stab→detect→track→viz`
   - [x] Test: continuity=0.98 (kesintisiz kilit), konum hatası≈1.7px, tek ID, boşluk köprüleme.
         Çekirdek `Kf2` OpenCV'siz `test_kalman_math` ile doğrulanır (P-SPD kararlı, kazanç≈α-β)

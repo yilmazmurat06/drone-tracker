@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "dtrack/common/cue.hpp"
 #include "dtrack/common/time.hpp"
 #include "dtrack/common/types.hpp"
 #include "dtrack/detection/mog_detector.hpp"
@@ -50,7 +51,8 @@ static double dist(const io::Vec2& a, const cv::Point2f& b) {
     return std::hypot(a.x - b.x, a.y - b.y);
 }
 
-static BenchResult run_bench(const io::SceneConfig& cfg, std::string name) {
+static BenchResult run_bench(const io::SceneConfig& cfg, std::string name,
+                             bool use_cue = true) {
     const auto t0 = common::now();
     io::SyntheticCameraSource cam(cfg, common::Modality::Visible, 60.0, t0, false);
     io::SyntheticImuSource imu(cfg, 1000.0, t0);
@@ -66,6 +68,7 @@ static BenchResult run_bench(const io::SceneConfig& cfg, std::string name) {
     float target_area = 3.14159f * cfg.target_sigma_px * cfg.target_sigma_px * 2.0f;
     dcfg.min_area = std::max(1.5, (double)target_area * 0.4);
     dcfg.max_area = std::max(50.0, (double)target_area * 6.0);
+    dcfg.use_cue_recovery = use_cue;  // kapalı-döngü A/B karşılaştırması için
     det = detection::MogDetector(dcfg);
 
     tracking::KalmanTracker tracker;
@@ -76,9 +79,7 @@ static BenchResult run_bench(const io::SceneConfig& cfg, std::string name) {
     BenchResult r;
     r.name = std::move(name);
 
-    int n_frames = 0;
-    double sum_det_err = 0;
-    int n_det_hit = 0, n_det_miss = 0, n_fp = 0;
+    int n_det_hit = 0, n_fp = 0;
     double sum_det_err2 = 0;  // kare hata toplamı (RMS için)
     int n_trk_locked = 0, n_trk_lost = 0, n_trk_coast = 0;
     double sum_trk_err2 = 0;
@@ -91,11 +92,12 @@ static BenchResult run_bench(const io::SceneConfig& cfg, std::string name) {
     for (int i = 0; i < kFrames; ++i) {
         auto f = cam.next_frame();
         if (!f) continue;
-        ++n_frames;
         auto imu_batch = imu.generate_until((i + 1) / 60.0);
         auto sf = stab.stabilize(*f, imu_batch);
         auto dets = det.detect(sf);
         auto tracks = tracker.update(dets, (*f)->stamp);
+        // Kapalı-döngü: bu karenin iz tahminini bir sonraki kare tespitine geri besle.
+        if (use_cue) det.set_cue(common::make_cue(tracks));
 
         if (i < kWarmup) continue;
         ++eval_frames;
@@ -119,7 +121,6 @@ static BenchResult run_bench(const io::SceneConfig& cfg, std::string name) {
                 sum_det_err2 += best_det_d * best_det_d;
                 n_fp += (int)dets.size() - 1;
             } else {
-                ++n_det_miss;
                 n_fp += (int)dets.size();
             }
         } else {
@@ -227,6 +228,31 @@ int main() {
                     r.trk_continuity, r.trk_rms_err, r.trk_id_count,
                     r.trk_coast_frac * 100,
                     r.ms_per_frame, r.trk_lost_frames);
+    }
+
+    // --- A/B: kapalı-döngü cued recovery KAPALI vs AÇIK (zor senaryolarda) ---
+    // Faydanın dürüst kanıtı: aynı senaryoyu cue kapalı ve açık koşturup recall/
+    // coast/continuity farkını göster. (Kolay senaryolarda zaten ~1.0 -> fark yok.)
+    std::printf("\n--- A/B: cued recovery (geri besleme) KAPALI -> ACIK ---\n");
+    std::printf("%-22s %12s %12s %12s\n", "senaryo", "recall", "coast%", "trk_rms");
+    struct AbCase { const char* label; float sigma, vel, man, ego, inten, tex; };
+    std::vector<AbCase> ab = {
+        {"worst_dim_tiny_fast", 0.7f, 100.0f, 80.0f, 0.024f, 50.0f, 30.0f},
+        {"noisy_bg",            1.1f, 55.0f, 40.0f, 0.012f, 90.0f, 30.0f},
+        {"tiny_2px",            0.7f, 55.0f, 40.0f, 0.012f, 90.0f, 18.0f},
+        {"dim_target",          1.1f, 55.0f, 40.0f, 0.012f, 50.0f, 18.0f},
+    };
+    for (const auto& c : ab) {
+        io::SceneConfig cfg = base;
+        cfg.target_sigma_px = c.sigma; cfg.target_vel.x = c.vel;
+        cfg.target_maneuver_amp = c.man; cfg.ego_amp_yaw = c.ego;
+        cfg.target_intensity = c.inten; cfg.bg_texture = c.tex;
+        auto off = run_bench(cfg, c.label, /*use_cue=*/false);
+        auto on  = run_bench(cfg, c.label, /*use_cue=*/true);
+        std::printf("%-22s %5.2f -> %5.2f %5.1f -> %5.1f %5.2f -> %5.2f\n", c.label,
+                    off.det_recall, on.det_recall,
+                    off.trk_coast_frac * 100, on.trk_coast_frac * 100,
+                    off.trk_rms_err, on.trk_rms_err);
     }
 
     // --- Özet: En zayıf metrikler ---

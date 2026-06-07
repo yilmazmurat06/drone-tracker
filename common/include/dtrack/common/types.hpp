@@ -66,6 +66,14 @@ struct Detection {
     // [0,1] "drone olma" olasılık skoru. Tek özellik kesinlik vermez; çoklu
     // zayıf ayırt edici birleştirilir (bkz. Problem 3). 0 = henüz skorlanmadı.
     float drone_score{0};
+    // Ölçüm konum belirsizliği σ_r ipucu (px). 0 = "ipucu yok, tracker varsayılan
+    // σ_r kullansın". Kapalı-döngü ROI kurtarma tespitleri (track-before-detect,
+    // düşük eşik) normal tespitlerden daha gürültülüdür; tracker bunları daha BÜYÜK
+    // R ile işleyip (daha az güvenle) Kalman güncellemesini ona göre tartar.
+    float meas_std{0};
+    // Bu tespit, tracker tahmininden kapalı-döngü ROI kurtarmasıyla mı üretildi?
+    // (teşhis / görselleştirme; ham global tespit = false).
+    bool from_cue{false};
 };
 
 // Takip durumu. Kalman/IMM state'inin dışarıya açılan özeti.

@@ -87,6 +87,20 @@ struct DetectorConfig {
     // Belirginlik koruması: iç_ort komşu ortalamasından bu kadar (gri seviye) FAZLA
     // değilse LCM hiç uygulanmaz (dim/düşük-SNR'da kontrast güvenilmez -> recall korunur).
     float lcm_min_prominence = 10.0f;
+
+    // --- Kapalı-döngü cued ROI kurtarma (track-before-detect-lite, bkz. cue.hpp) ---
+    // Tracker kilitliyken (cue geçerli) VE global tespit kapı içinde aday bulamazsa,
+    // tahmin etrafındaki küçük ROI'de DÜŞÜK eşikle, MOG2-AND şartı OLMADAN tek en iyi
+    // top-hat tepesi kurtarılır. MOG2-AND'siz olması KRİTİK: hover / düşük-SNR hedef
+    // zamansal hareket maskesini tetiklemese bile (global pipeline'da görünmez olur)
+    // kapalı-döngü ROI onu yakalar -> KESİNTİSİZ TAKİP (IRST kapalı-döngü ROI yaklaşımı).
+    // Lokal SNR tabanı (cue_min_peak_tophat) saf gürültünün kurtarma üretmesini sınırlar.
+    bool use_cue_recovery = true;
+    float cue_thresh_k = 3.0f;          // ROI lokal eşik katsayısı (global thresh_k=6'dan düşük)
+    float cue_min_peak_tophat = 12.0f;  // ROI tepe top-hat tabanı (global min_peak=25'ten düşük, 0 değil)
+    float cue_meas_std = 3.0f;          // kurtarma ölçümünün σ_r ipucu (px); normalden büyük -> az güven
+    int cue_max_radius = 40;            // ROI yarıçap üst sınırı (px)
+    int cue_min_radius = 6;             // ROI yarıçap alt sınırı (px)
 };
 
 class MogDetector : public IDetector {
@@ -95,6 +109,10 @@ public:
 
     std::vector<common::Detection> detect(const common::StabilizedFrame& sf) override;
     void reset() override;
+
+    // Kapalı-döngü geri besleme: tracker'ın bir sonraki kare tahmini. Bir SONRAKİ
+    // detect()'te global tespit kapıyı dolduramazsa bu ROI'de kurtarma yapılır.
+    void set_cue(const common::TargetCue& cue) override { cue_ = cue; }
 
     // Son karenin güncel->referans (kümülatif) dönüşümü. Tracking pürüzsüz
     // referans koordinatında takip etmek için kullanır.
@@ -118,6 +136,8 @@ private:
     bool has_ref_{false};
     cv::Size ref_size_{};
     int resets_{0};
+
+    common::TargetCue cue_{};  // tracker'dan gelen son geri besleme (kapalı-döngü)
 };
 
 }  // namespace dtrack::detection

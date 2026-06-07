@@ -25,6 +25,7 @@ void MogDetector::reset() {
     h_cum_ = cv::Matx33f::eye();
     has_ref_ = false;
     resets_ = 0;
+    cue_ = common::TargetCue{};
 }
 
 void MogDetector::make_reference(const cv::Mat& gray) {
@@ -233,6 +234,91 @@ std::vector<common::Detection> MogDetector::detect(const common::StabilizedFrame
         d.intensity = peak;
         d.drone_score = 0.0f;  // skorlama Problem 3'te (IDiscriminator)
         out.push_back(d);
+    }
+
+    // --- 7) Kapalı-döngü cued ROI kurtarma (track-before-detect-lite). ---
+    // Tracker kilitliyken (cue geçerli) ve global pass tahmin kapısı içinde aday
+    // bulamadıysa, tahmin etrafındaki ROI'de DÜŞÜK eşikle (MOG2-AND'siz) tek en iyi
+    // top-hat tepesini kurtar. Kapı içinde zaten tespit varsa kurtarma gereksiz.
+    if (cfg_.use_cue_recovery && cue_.valid && has_ref_) {
+        const float gate =
+            std::clamp(cue_.gate_radius, static_cast<float>(cfg_.cue_min_radius),
+                       static_cast<float>(cfg_.cue_max_radius));
+        bool covered = false;
+        for (const auto& d : out) {
+            const float dx = d.centroid.x - cue_.predicted.x;
+            const float dy = d.centroid.y - cue_.predicted.y;
+            if (dx * dx + dy * dy <= gate * gate) { covered = true; break; }
+        }
+        if (!covered) {
+            // Cue GÜNCEL koordinatta; tespit referans koordinatında. h_cum_ ile taşı.
+            const cv::Vec3f cr =
+                h_cum_ * cv::Vec3f(cue_.predicted.x, cue_.predicted.y, 1.0f);
+            const float cwn = (std::abs(cr[2]) > 1e-6f) ? 1.0f / cr[2] : 1.0f;
+            const float cxr = cr[0] * cwn, cyr = cr[1] * cwn;
+
+            const int x0 = std::max(0, static_cast<int>(std::floor(cxr - gate)));
+            const int y0 = std::max(0, static_cast<int>(std::floor(cyr - gate)));
+            const int x1 = std::min(reg.cols - 1, static_cast<int>(std::ceil(cxr + gate)));
+            const int y1 = std::min(reg.rows - 1, static_cast<int>(std::ceil(cyr + gate)));
+            if (x1 > x0 && y1 > y0) {
+                const cv::Rect roi(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+                // ROI lokal eşik: 5×5 top-hat istatistiğinden (yalnız geçerli pikseller).
+                cv::Scalar m, s;
+                cv::meanStdDev(tophat5(roi), m, s, valid(roi));
+                const double local_thr = std::max(m[0] + cfg_.cue_thresh_k * s[0],
+                                                  static_cast<double>(cfg_.cue_min_peak_tophat));
+                // ROI'de en yüksek (çoklu-ölçek) top-hat tepesi — dairesel kapı + geçerli.
+                float best_resp = -1.0f;
+                int bxp = -1, byp = -1;
+                for (int y = y0; y <= y1; ++y) {
+                    const uchar* trow = tophat.ptr<uchar>(y);
+                    const uchar* vrow = valid.ptr<uchar>(y);
+                    for (int x = x0; x <= x1; ++x) {
+                        if (!vrow[x]) continue;
+                        const float dgx = x - cxr, dgy = y - cyr;
+                        if (dgx * dgx + dgy * dgy > gate * gate) continue;
+                        if (trow[x] > best_resp) { best_resp = trow[x]; bxp = x; byp = y; }
+                    }
+                }
+                if (bxp >= 0 && best_resp >= local_thr) {
+                    // Tepe etrafında 5×5 pencerede top-hat-ağırlıklı alt-piksel centroid.
+                    const int w = 2;
+                    double sw = 0, sx = 0, sy = 0, ar = 0;
+                    float peak = 0;
+                    for (int y = std::max(0, byp - w); y <= std::min(reg.rows - 1, byp + w); ++y) {
+                        const uchar* trow = tophat.ptr<uchar>(y);
+                        const uchar* rrow = reg.ptr<uchar>(y);
+                        for (int x = std::max(0, bxp - w); x <= std::min(reg.cols - 1, bxp + w); ++x) {
+                            const double wv = trow[x];
+                            if (wv < local_thr) continue;
+                            sw += wv;
+                            sx += wv * x;
+                            sy += wv * y;
+                            ar += 1.0;
+                            peak = std::max(peak, static_cast<float>(rrow[x]));
+                        }
+                    }
+                    if (sw > 0) {
+                        const float rx = static_cast<float>(sx / sw);
+                        const float ry = static_cast<float>(sy / sw);
+                        const cv::Vec3f pc = h_inv * cv::Vec3f(rx, ry, 1.0f);
+                        const float iw = (std::abs(pc[2]) > 1e-6f) ? 1.0f / pc[2] : 1.0f;
+                        common::Detection d;
+                        d.stamp = sf.frame->stamp;
+                        d.modality = sf.frame->modality;
+                        d.centroid = {pc[0] * iw, pc[1] * iw};
+                        d.area_px = std::max(1.0f, static_cast<float>(ar));
+                        d.aspect_ratio = 1.0f;
+                        d.intensity = peak;
+                        d.drone_score = 0.0f;
+                        d.meas_std = cfg_.cue_meas_std;  // daha az güven -> tracker daha büyük R kullanır
+                        d.from_cue = true;
+                        out.push_back(d);
+                    }
+                }
+            }
+        }
     }
 
     return out;

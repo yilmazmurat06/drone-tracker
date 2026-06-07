@@ -96,7 +96,9 @@ private:
     };
 
     void mix_predict(TrackImpl& t, double dt) const;  // IMM karışım + her model predict + kombine
-    void correct(TrackImpl& t, const common::Detection& z) const;  // her model düzelt + mod güncelle
+    // her model düzelt + mod güncelle. r: bu tespitin ölçüm varyansı (meas_std ipucu
+    // varsa per-tespit, yoksa varsayılan σ_r²) -> kapalı-döngü kurtarma ölçümü az güvenle işlenir.
+    void correct(TrackImpl& t, const common::Detection& z, double r) const;
     void recombine(TrackImpl& t) const;               // kombine state + kovaryans önbelleğini güncelle
     common::Track to_public(const TrackImpl& t, common::Timestamp stamp, double dt_pred) const;
 

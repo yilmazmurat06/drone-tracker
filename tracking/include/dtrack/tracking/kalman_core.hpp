@@ -94,6 +94,45 @@ struct Kf2 {
         const double nP11 = -k1 * m10 + m11 + r * k1 * k1;
         P00 = nP00; P01 = nP01; P10 = nP10; P11 = nP11;
     }
+
+    // PDAF (Probabilistic Data Association Filter) güncellemesi — TEK eksen.
+    //
+    // NEDEN: clutter'da (kapı içinde birden çok aday) "en yakını seç" (nearest
+    // neighbor) yanlış adaya kilitlenip izi saptırabilir. PDAF bunun yerine kapı
+    // içindeki TÜM adayları olabilirliklerine göre AĞIRLIKLANDIRIP birleşik bir
+    // innovation üretir (Bar-Shalom). Tek hedef + clutter için NN'den belirgin
+    // üstün; az clutter'da NN'e yakınsar (β tek adayda ~1 olur).
+    //
+    // Bu eksen için: birleşik innovation  ỹ = Σ_i β_i y_i ;  β0 = "geçerli ölçüm yok".
+    //   x      += K·ỹ
+    //   P^c     = P_pred − K S Kᵀ                 (tek-ölçüm güncellenmiş kovaryans)
+    //   P̃      = K·(Σ_i β_i y_i² − ỹ²)·Kᵀ        (innovation yayılımı; β0 ile büyür)
+    //   P(k|k)  = β0·P_pred + (1−β0)·P^c + P̃     (moment eşleme)
+    // β_i ağırlıkları İKİ eksenin ortak 2B olabilirliğinden gelir (tracker hesaplar);
+    // köşegen R + ayrışık eksen sayesinde GÜNCELLEME eksen-bazında yapılabilir.
+    void correct_pda(const double* y, const double* beta, int m, double beta0, double r) {
+        const double s = P00 + r;
+        const double k0 = P00 / s;
+        const double k1 = P10 / s;
+        double ytil = 0.0, sum_by2 = 0.0;
+        for (int i = 0; i < m; ++i) {
+            ytil += beta[i] * y[i];
+            sum_by2 += beta[i] * y[i] * y[i];
+        }
+        p += k0 * ytil;
+        v += k1 * ytil;
+        const double Pp00 = P00, Pp01 = P01, Pp10 = P10, Pp11 = P11;  // P_pred
+        // P^c = P_pred − K S Kᵀ   (K S Kᵀ = s·[[k0²,k0k1],[k0k1,k1²]])
+        const double Pc00 = P00 - s * k0 * k0;
+        const double Pc01 = P01 - s * k0 * k1;
+        const double Pc10 = P10 - s * k1 * k0;
+        const double Pc11 = P11 - s * k1 * k1;
+        const double spread = sum_by2 - ytil * ytil;  // ≥ 0
+        P00 = beta0 * Pp00 + (1.0 - beta0) * Pc00 + k0 * k0 * spread;
+        P01 = beta0 * Pp01 + (1.0 - beta0) * Pc01 + k0 * k1 * spread;
+        P10 = beta0 * Pp10 + (1.0 - beta0) * Pc10 + k1 * k0 * spread;
+        P11 = beta0 * Pp11 + (1.0 - beta0) * Pc11 + k1 * k1 * spread;
+    }
 };
 
 }  // namespace dtrack::tracking

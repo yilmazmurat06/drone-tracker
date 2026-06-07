@@ -61,6 +61,17 @@ struct KalmanConfig {
     // İki-nokta hız başlatma + akıl kontrolü.
     double max_init_speed = 400.0;  // px/s; üstündeki hızlar sıfırlanır
     int pending_max_age = 10;       // bekletme karesi
+
+    // --- PDAF (Probabilistic Data Association Filter) ---
+    // Onaylı/coasting (yerleşik) izler için clutter-dayanıklı YUMUŞAK ilişkilendirme.
+    // Kapı içindeki TÜM adayları olabilirliğe göre ağırlıklandırıp birleşik innovation
+    // ile günceller (bkz. kalman_core.hpp correct_pda). "En yakını seç" (NN) yanlış
+    // adaya kilitlenebilirken PDAF clutter'da izi sağlam tutar. Tentative izler hâlâ
+    // NN ile (yeni iz başlatma mantığı sade kalsın). use_pdaf=false -> saf NN (eski yol).
+    bool use_pdaf = true;
+    double pdaf_pd = 0.95;            // P_D: tespit olasılığı (hedef o karede görülür mü)
+    double pdaf_pg = 0.999;           // P_G: kapı olasılığı (gate_nis=13.8 -> ~%99.9)
+    double pdaf_clutter_density = 2e-4;  // λ: birim alan başına yanlış-alarm yoğunluğu (px^-2)
 };
 
 class KalmanTracker : public ITracker {

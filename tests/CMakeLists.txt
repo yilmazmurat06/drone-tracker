@@ -63,6 +63,19 @@ if(OpenCV_FOUND)
         dtrack_tracking dtrack_detection dtrack_stabilization dtrack_io)
     add_test(NAME imm_tracker COMMAND test_imm_tracker)
 
+    # Kapalı-döngü cued ROI kurtarma (track-before-detect-lite): düşük-SNR kurtarma,
+    # sahte-üretmeme güvenliği, entegrasyon recall artışı.
+    add_executable(test_cue_recovery test_cue_recovery.cpp)
+    target_link_libraries(test_cue_recovery PRIVATE
+        dtrack_tracking dtrack_detection dtrack_stabilization dtrack_io)
+    add_test(NAME cue_recovery COMMAND test_cue_recovery)
+
+    # PDAF (Probabilistic Data Association): hedefe yakin clutter + kacirmada
+    # NN'den ustun (dusuk RMS, kararli ID). Tracker'i dogrudan sentetik tespitle besler.
+    add_executable(test_pdaf_clutter test_pdaf_clutter.cpp)
+    target_link_libraries(test_pdaf_clutter PRIVATE dtrack_tracking)
+    add_test(NAME pdaf_clutter COMMAND test_pdaf_clutter)
+
     add_executable(bench_pipeline bench_pipeline.cpp)
     target_link_libraries(bench_pipeline PRIVATE
         dtrack_tracking dtrack_detection dtrack_stabilization dtrack_io)

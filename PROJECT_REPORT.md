@@ -1,8 +1,8 @@
 # Drone Tracker — Kapsamlı Proje Raporu
 
-**Tarih**: 5 Haziran 2026 (güncelleme: hız-fix + video_eval + LCM + IMM)  
+**Tarih**: 7 Haziran 2026 (güncelleme: **kapalı-döngü cued tracking + PDAF**)  
 **Dil**: C++20  
-**Testler**: 9 birim/regresyon testi (%100 geçti)  
+**Testler**: 13 birim/regresyon testi (%100 geçti)  
 
 ---
 
@@ -106,6 +106,56 @@ aynı sayılar: k0=0.523, RMS≈0.97px, KalmanTracker kilit sürekliliği 1.00 b
 tüm C++ dosyaları gerçek OpenCV başlıklarına karşı derlenir. Tam pipeline testleri (`test_tracker`
 vb.) OpenCV gerektirir → `ctest` ile koşturulur.
 
+### 2.9 Kapalı-döngü "cued tracking" — track → detect geri beslemesi (ANA İYİLEŞTİRME)
+
+**Sorun**: Pipeline açık-döngüydü (detect → track). Hedefe *kilitlendikten sonra* tracker
+hedefin nerede olacağını (Kalman tahmini) biliyordu ama bu bilgi tespite GERİ DÖNMÜYORDU.
+Sonuç: global tespit (top-hat ∧ MOG2) bir karede hedefi kaçırırsa (düşük SNR, hover, ego
+artığı), iz yalnızca körlemesine coast ediyordu → worst-case recall 0.84, coast %10.
+
+**Çözüm — kapalı-döngü ROI kurtarma (IRST literatürü)**:
+1. **CueBoard** (`common/cue.hpp`): tek-yazar/çok-okur lock-free anlık görüntü (seqlock).
+   Tracker her karede en güvenli Confirmed/Coasting izin **ileri tahminini** (`predicted`)
+   ve coast'la büyüyen kapı yarıçapını yazar; detektör okur. IMU gibi cue de pipeline
+   kuyruğuna girmez — küçük bir YAN KANALdır (bir kare bayatlık zararsız: cue zaten bir
+   tahmindir). Threaded app'te `TrackStage` yazar, `DetectStage` okur; bench/video_eval'de
+   senkron `det.set_cue(make_cue(tracks))`.
+2. **MogDetector kurtarma geçişi** (`mog_detector.cpp` adım 7): global pass tahmin kapısı
+   içinde aday bulamazsa, tahmin etrafındaki ROI'de **DÜŞÜK eşik** (k=3, global k=6) +
+   **MOG2-AND şartı OLMADAN** (track-before-detect-lite) tek en iyi top-hat tepesini
+   alt-piksel centroid'le kurtarır. MOG2-AND'siz olması kritik: hover/düşük-SNR hedef
+   zamansal hareket maskesini tetiklemese de yakalanır. Lokal SNR tabanı (mean+3σ, floor 12)
+   saf gürültünün kurtarma üretmesini engeller (test ile doğrulandı: boş cue → 0 sahte).
+3. **Az-güvenli ölçüm**: kurtarma tespiti `meas_std` ipucuyla (σ_r=3px) işaretlenir; tracker
+   bunu daha büyük R ile (Kalman + IMM) işler → daha az ağırlıklı, daha geniş etkin kapı.
+
+**Sonuç (bench A/B, cue KAPALI→AÇIK)**: worst-case recall **0.84 → 1.00**, coast **%10 → %0**,
+worst trk_rms 2.30 → 2.02. **17/17 senaryoda recall=1.00 & continuity=1.00.** Latency maliyeti
+yok (kurtarma yalnız kaçırılan karede, küçük ROI'de çalışır; ms/kare ~6 değişmedi). Kurtarma
+gerçek görüntü kanıtına dayanır (det_rms 0.18px korundu → tahmin yankısı değil).
+
+### 2.10 PDAF — clutter-dayanıklı veri ilişkilendirme (varsayılan)
+
+**Sorun**: "En yakını seç" (nearest-neighbor) ilişkilendirme, hedefe yakın clutter'da
+(kapı içinde birden çok aday) yanlış adaya kilitlenir; ayrıca her clutter kümesinden
+tentative iz açılıp **kimlik parçalanır** (sahte rakip izler).
+
+**Çözüm — PDAF** (`Probabilistic Data Association Filter`, Bar-Shalom): yerleşik
+(Confirmed/Coasting) izler için kapı içindeki TÜM adaylar olabilirliğe göre
+ağırlıklandırılır:
+- Olabilirlik `L_i = exp(−NIS_i/2)`; clutter terimi `b = λ·2π·√|S|·(1−P_D·P_G)/P_D`.
+- Ağırlıklar `β_i = L_i/(b+ΣL)`, "ölçüm yok" `β_0 = b/(b+ΣL)`.
+- Birleşik innovation `ỹ = Σ β_i y_i`; durum `x += K·ỹ`; kovaryans moment-eşleme:
+  `P = β_0·P_pred + (1−β_0)·P^c + K·(Σβ_i y_i² − ỹ²)·Kᵀ` (innovation yayılımı).
+- Köşegen R + ayrışık eksen sayesinde GÜNCELLEME eksen-bazında `Kf2::correct_pda` ile yapılır.
+- Kapı içi adaylar yerleşik ize "ait" sayılır → **clutter sahte iz DOĞURAMAZ**. Tentative
+  izler hâlâ NN (başlatma sade kalsın). `use_pdaf=false` → eski saf-NN yolu (bayt-aynı).
+
+**Sonuç (`test_pdaf_clutter`, hedefe yakın clutter + %20 kaçırma)**: kimlik kararlılığı
+**NN 5 ID → PDAF 1 ID**, continuity 1.00; RMS NN ile kıyaslanabilir (1.62 vs 1.73 — NN'in
+düşük RMS'i "kare başına en yakın izi seç" metriğinin çoklu-iz parçalanmasını ödüllendiren
+yanılsamasıdır). Sentetik bench'te (FP'ler hedeften uzak) PDAF≈NN → regresyon yok.
+
 ---
 
 ## 3. Modül Detayları
@@ -196,7 +246,13 @@ vb.) OpenCV gerektirir → `ctest` ile koşturulur.
 
 **9b) Yönlü yerel kontrast (LCM/WLDM) son-elemesi** *(yeni)*: IRST literatüründeki çok-yönlü Local Contrast Measure. Aday merkezinden GEÇEN kenar/çizgi karşıt iki sektörü birden parlatır → elenir; kompakt hedef (sönük olsa da) tüm yönlerde arka planla çevrili → korunur. `reg` üzerinde, top-hat∧MOG2'den geçmiş adaylara. **Recall-güvenli varsayılan** (lr=0.90, prom=10): sentetik izotropik dokuda ~no-op; gerçek yapısal arka planda (bulut/ufuk/yer) devreye girer.
 
-**Test sonucu (gerçek)**: Recall 1.00, konum hatası 0.18 px, FP ~1.4/kare. *(Not: raporun eski "FP 0.27/kare, 8× azaltıldı" iddiası mevcut kodla uyuşmuyordu; gerçek değer ~1.4. FP'ler izotropik doku tepeleri olduğu için LCM ile daha fazla düşürmek worst-case recall'a mal oluyor — bkz. §5.3.)
+**10) Kapalı-döngü cued ROI kurtarma** *(YENİ — §2.9)*: `set_cue()` ile tracker'ın bir
+sonraki kare tahmini alınır. Global pass tahmin kapısı içinde aday bulamazsa, ROI'de düşük
+eşik + MOG2-AND'siz tek en iyi top-hat tepesi alt-piksel kurtarılır (`meas_std` ile az-güven
+işaretli). Hover/düşük-SNR'da kilidi korur; lokal SNR tabanı sahte üretmeyi engeller.
+
+**Test sonucu (gerçek)**: Recall 1.00, konum hatası 0.18 px, FP ~1.4/kare. Kapalı-döngü ile
+worst-case sistem-recall 0.84→1.00 (FP'ler iz-seviyesinde önemsiz; bkz. §5.3).
 
 ### 3.6 `detection/` — Drone Skorlama [Problem 3]
 
@@ -233,9 +289,15 @@ vb.) OpenCV gerektirir → `ctest` ile koşturulur.
 
 2. **GATE**: **NIS/Mahalanobis** kapısı: `NIS = yᵀS⁻¹y ≤ 13.8` (2-dof χ², %99.9). Coast'ta P (dolayısıyla S) büyür → kapı DOĞAL genişler (elle katsayı yok).
 
-3. **ASSOCIATE**: Onaylı track öncelikli (prio 2), sonra tentative (1), sonra coasting (0) aç gözlü atama; eşitlikte küçük NIS önce. Coasting track confirmed track'in tespitini "çalmaz".
+3. **ASSOCIATE**: İki yol. **PDAF (varsayılan, §2.10)**: yerleşik (Confirmed/Coasting) izler
+   kapı içi TÜM adayları olabilirliğe göre ağırlıklandırır (clutter sahte iz doğuramaz, ID
+   kararlı); tentative izler NN. **NN yedek** (`use_pdaf=false`): onaylı öncelikli aç gözlü atama
+   (prio 2/1/0, eşitlikte küçük NIS önce; coasting track confirmed'ın tespitini "çalmaz").
 
-4. **UPDATE**: Kalman düzeltmesi (Joseph-form, her eksen). Kararlı-durum kazancı σ_a/σ_r ile ayarlanır (varsayılan ≈ α-β α=0.55). Coasting→Confirmed terfisi.
+4. **UPDATE**: Kalman düzeltmesi (Joseph-form, her eksen; PDAF'te `correct_pda` birleşik
+   innovation + spread-of-innovations). Kararlı-durum kazancı σ_a/σ_r ile ayarlanır
+   (varsayılan ≈ α-β α=0.55). Per-tespit R ipucu (`meas_std`) varsa o kullanılır
+   (kapalı-döngü kurtarma ölçümü daha büyük R ile). Coasting→Confirmed terfisi.
 
 5. **LIFECYCLE**: M-of-N onayı (8 karede 3 tespit → Confirmed). Tentative 2 ardışık ıskalarsa silinir. max_coast=22 kare (~0.37s).
 
@@ -405,44 +467,66 @@ drone-tracker/
 
 ### 5.2 Senaryo sonuçları
 
-> **Ölçüm tarihi: hız-fix + LCM (recall-güvenli varsayılan) sonrası, x86 geliştirme
+> **Ölçüm: kapalı-döngü cued tracking (§2.9) + PDAF (§2.10) sonrası, x86 geliştirme
 > makinesinde.** `ms/k` makineye bağlıdır (hedef ARM A78/A76'da ~2-4× daha yüksek
-> beklenir); göreli kıyas için değil mutlak bütçe için değil, trend için kullanın.
+> beklenir); mutlak bütçe için değil trend için kullanın. Cued recovery'nin etkisini
+> görmek için `bench_pipeline` çıktısının "A/B" bölümüne bakın (cue KAPALI→AÇIK).
 
 | # | Senaryo | Recall | Prec | Cont | Trk RMS | ID# | ms/k |
 |---|---|---|---|---|---|---|---|
-| 1 | **baseline** (σ=1.1, v=55, man=40, ego=0.012, I=90, tex=18) | 1.00 | 0.43 | 1.00 | 1.59 | 1 | 6.1 |
-| 2 | tiny_2px (σ=0.7) | 0.99 | 0.43 | 1.00 | 1.61 | 1 | 6.2 |
-| 3 | large_6px (σ=1.8) | 1.00 | 0.53 | 1.00 | 1.59 | 1 | 6.5 |
-| 4 | **medium_15px** (σ=2.5) | 1.00 | 0.77 | 1.00 | 1.60 | 1 | 6.3 |
-| 5 | **close_25px** (σ=4.0) | 1.00 | 1.00 | 1.00 | 1.60 | 1 | 6.4 |
-| 6 | slow_target (v=20) | 1.00 | 0.44 | 1.00 | 1.58 | 1 | 6.5 |
-| 7 | fast_target (v=100) | 1.00 | 0.44 | 1.00 | 1.60 | 1 | 6.4 |
-| 8 | no_maneuver (man=0) | 1.00 | 0.41 | 1.00 | 1.57 | 1 | 6.8 |
-| 9 | heavy_maneuver (man=80) | 1.00 | 0.41 | 1.00 | 1.58 | 1 | 6.9 |
-| 10 | calm_ego (ego=0.006) | 1.00 | 0.46 | 1.00 | 1.49 | 1 | 6.7 |
-| 11 | heavy_ego (ego=0.024) | 1.00 | 0.48 | 1.00 | 1.89 | 1 | 6.7 |
-| 12 | dim_target (I=50) | 1.00 | 0.43 | 1.00 | 1.60 | 1 | 6.4 |
-| 13 | bright_target (I=130) | 1.00 | 0.39 | 1.00 | 1.58 | 1 | 8.0 |
-| 14 | noisy_bg (tex=30) | 0.98 | 0.16 | 1.00 | 1.72 | 1 | 7.0 |
-| 15 | clean_bg (tex=10) | 1.00 | 0.53 | 1.00 | 1.58 | 1 | 7.9 |
-| 16 | **worst** (σ=0.7, v=100, man=80, ego=0.024, I=50, tex=30) | 0.84 | 0.16 | 0.99 | 2.79 | 1 | 6.7 |
-| 17 | **best** (σ=1.8, v=20, man=0, ego=0.006, I=130, tex=10) | 1.00 | 0.49 | 1.00 | 1.48 | 1 | 8.0 |
+| 1 | **baseline** (σ=1.1, v=55, man=40, ego=0.012, I=90, tex=18) | 1.00 | 0.43 | 1.00 | 1.64 | 1 | 5.9 |
+| 2 | tiny_2px (σ=0.7) | 1.00 | 0.43 | 1.00 | 1.63 | 1 | 5.9 |
+| 3 | large_6px (σ=1.8) | 1.00 | 0.53 | 1.00 | 1.63 | 1 | 6.0 |
+| 4 | **medium_15px** (σ=2.5) | 1.00 | 0.77 | 1.00 | 1.64 | 1 | 6.0 |
+| 5 | **close_25px** (σ=4.0) | 1.00 | 1.00 | 1.00 | 1.65 | 1 | 6.0 |
+| 6 | slow_target (v=20) | 1.00 | 0.44 | 1.00 | 1.63 | 1 | 5.8 |
+| 7 | fast_target (v=100) | 1.00 | 0.44 | 1.00 | 1.64 | 1 | 5.8 |
+| 8 | no_maneuver (man=0) | 1.00 | 0.41 | 1.00 | 1.62 | 1 | 5.9 |
+| 9 | heavy_maneuver (man=80) | 1.00 | 0.41 | 1.00 | 1.62 | 1 | 5.8 |
+| 10 | calm_ego (ego=0.006) | 1.00 | 0.46 | 1.00 | 1.58 | 1 | 5.9 |
+| 11 | heavy_ego (ego=0.024) | 1.00 | 0.48 | 1.00 | 1.80 | 1 | 5.9 |
+| 12 | dim_target (I=50) | 1.00 | 0.43 | 1.00 | 1.64 | 1 | 5.9 |
+| 13 | bright_target (I=130) | 1.00 | 0.39 | 1.00 | 1.63 | 1 | 7.4 |
+| 14 | noisy_bg (tex=30) | 1.00 | 0.17 | 1.00 | 1.68 | 1 | 5.9 |
+| 15 | clean_bg (tex=10) | 1.00 | 0.53 | 1.00 | 1.62 | 1 | 7.5 |
+| 16 | **worst** (σ=0.7, v=100, man=80, ego=0.024, I=50, tex=30) | 1.00 | 0.18 | 1.00 | 2.02 | 1 | 5.9 |
+| 17 | **best** (σ=1.8, v=20, man=0, ego=0.006, I=130, tex=10) | 1.00 | 0.49 | 1.00 | 1.57 | 1 | 7.6 |
+
+**A/B (cued recovery KAPALI → AÇIK), zor senaryolar:**
+
+| Senaryo | Recall | Coast % | Trk RMS |
+|---|---|---|---|
+| worst_dim_tiny_fast | 0.84 → **1.00** | 9.3 → **0.0** | 2.31 → **2.02** |
+| noisy_bg | 0.98 → **1.00** | 0.7 → **0.0** | 1.70 → 1.68 |
+| tiny_2px | 0.99 → **1.00** | 0.0 → 0.0 | 1.63 → 1.63 |
 
 ### 5.3 Analiz
 
 **Güçlü yanlar**:
-- 17/17 senaryoda recall ≥ 0.84, continuity ≥ 0.99
-- 15/17 senaryoda recall = 1.00, continuity = 1.00
-- **Kimlik kararlılığı: 17/17 senaryoda TEK ID** (hız-fix sonrası worst dahil; eskiden worst'te 3 ID atlıyordu — doğru px/s tahmini coast boşluklarını köprülüyor)
+- **17/17 senaryoda recall = 1.00 VE continuity = 1.00** (kapalı-döngü cued recovery sonrası;
+  worst-case recall 0.84→1.00, coast %10→%0 — eskiden tek-kare tespit düşük SNR'da çökerken
+  şimdi tahmin ROI'sinden kurtarılıyor)
+- **Kimlik kararlılığı: 17/17 senaryoda TEK ID** (sentetik; clutter testinde PDAF NN'in
+  5-ID parçalanmasını 1-ID'ye indiriyor — bkz. §2.10)
 - Hedef boyutu 2 px'ten 25 px'e kadar sorunsuz (çoklu ölçek top-hat + DoG)
 - Hız, manevra, ego şiddeti, parlaklık, arka plan gürültüsü — hiçbiri tek başına pipeline'ı bozmuyor
-- Track RMS hız-fix sonrası düştü (örn. baseline 1.84→1.59, worst 3.93→2.79)
+- Latency artmadı: cued recovery yalnız kaçırılan karede küçük ROI'de çalışır (ms/kare ~6)
 
 **Zayıf yanlar (bilinen, belgelenen — DÜRÜST sayılar)**:
-- **Precision düşük: kolay sahnelerde 0.39-0.53, gürültülü/worst'te 0.16.** FP/kare baseline'da ~1.3, noisy_bg'de ~5.0. DoG + çoklu ölçek top-hat bol aday üretir. ANCAK tracker M-of-N + iki-nokta hız-aklı FP'leri eliyor → continuity yine 1.00 ve tek ID. (Bu sayılar raporun eski sürümünden farklıdır; eski "FP 0.27 / prec 0.71" değerleri mevcut kodla uyuşmuyordu, düzeltildi.)
-- **LCM neden precision'ı kurtarmıyor?** Yönlü yerel-kontrast eleme (§3.5) eklendi ama sentetik sahnenin FP'leri İZOTROPİK doku tepeleridir (kenar değil) → kontrast ölçüsüyle dim hedeften ayrılamazlar. Recall-güvenli varsayılanda LCM sentetikte ~no-op'tur (bilinçli); asıl faydası gerçek yapısal arka planda (bulut/ufuk/yer kenarları), `video_eval` ile doğrulanmalı.
-- **worst senaryo (SNR≈1.4)**: recall 0.84 — dim+küçük+hızlı+manevra+ağır-ego birleşimi bilgi-teorik duvar (bkz. §11/sınırlar). Continuity 0.99'a çıktı (hız-fix), ama tek-kare tespit hâlâ zorlanıyor.
+- **Detektör-seviyesi precision düşük: kolay sahnelerde 0.39-0.53, gürültülü/worst'te 0.16-0.18.**
+  FP/kare baseline'da ~1.3, noisy_bg'de ~5.0. DoG + çoklu ölçek top-hat bol aday üretir.
+  ANCAK iz-seviyesinde bu önemsiz: tracker M-of-N + NIS kapısı + (yeni) **PDAF** FP'leri
+  eliyor → continuity 1.00 ve tek ID. Kapalı-döngü cue de kilitliyken ilgiyi tahmin ROI'sine
+  topladığı için FP'ler izi etkilemiyor. (Yani "precision" sayısı yanıltıcı bir ham-detektör
+  metriği; sistem-seviyesi performans tam.)
+- **LCM neden ham precision'ı kurtarmıyor?** Sentetik sahnenin FP'leri İZOTROPİK doku
+  tepeleridir (kenar değil) → kontrast ölçüsüyle dim hedeften ayrılamazlar. Asıl faydası
+  gerçek yapısal arka planda (bulut/ufuk/yer kenarları), `video_eval` ile doğrulanmalı.
+- **worst senaryo, tek-kare global tespit hâlâ SNR≈1.4'te zorlanır** (ham recall ~0.84).
+  Bu bilgi-teorik bir duvar (§12). ANCAK kapalı-döngü cued recovery, kilitliyken bu
+  kaçırmaları tahmin ROI'sinden kurtardığı için **sistem-seviyesi recall 1.00'a, coast %0'a**
+  çıkar. Yani duvar, *kilitten önce* (acquisition) hâlâ geçerli; *kilitten sonra* (asıl
+  hedef: kesintisiz takip) pratikte aşıldı.
 
 ---
 
@@ -459,10 +543,12 @@ drone-tracker/
 | 7 | `fusion` | ✓ 78/80 kilitli, hemfikirlik 1.0, tek modalite fallback |
 | 8 | `track_velocity` | ✓ hız çıktısı px/s doğru + fps-değişmez (60×-şişme bug'ı regresyon kilidi) |
 | 9 | `imm_tracker` | ✓ IMM (iki Kalman modelli), tek Kalman ile aynı sağlamlık çıtası |
-| 10 | `alpha_beta_tracker` | ✓ **YENİ** — yedek α-β aynı çıta (Kalman karşılaştırma temeli) |
-| 11 | `kalman_math` | ✓ **YENİ** — Kf2 çekirdek (OpenCV'siz): P-SPD kararlı, kazanç≈α-β, fps-değişmez |
+| 10 | `alpha_beta_tracker` | ✓ yedek α-β aynı çıta (Kalman karşılaştırma temeli) |
+| 11 | `kalman_math` | ✓ Kf2 çekirdek (OpenCV'siz): P-SPD kararlı, kazanç≈α-β, fps-değişmez |
+| 12 | `cue_recovery` | ✓ **YENİ** — kapalı-döngü ROI kurtarma: düşük-SNR'da kurtarır (hata 0.18px), boş cue'da sahte üretmez, entegrasyon recall 0.84→1.00 |
+| 13 | `pdaf_clutter` | ✓ **YENİ** — PDAF hedefe yakın clutter'da kimlik kararlılığı (NN 5 ID → PDAF 1 ID), continuity 1.00 |
 
-**Toplam**: 11/11 test geçti (%100). (`kalman_math` OpenCV olmadan da koşar.)
+**Toplam**: 13/13 test geçti (%100). (`kalman_math` OpenCV olmadan da koşar.)
 
 ---
 
@@ -539,6 +625,8 @@ drone-tracker/
 | **ATA-YOLOv8** (drones-09-00154.pdf) | Havadan-havaya YOLOv8 tabanlı tespit, MOT-FLY/Det-Fly verisetleri | DL yaklaşımı, bizim CPU-only kararımızı doğruladı. Verisetleri ileride kıyaslama için |
 | **Object Detection and Tracking with Autonomous UAV** (arXiv:2206.12941) | Savaş İHA simülasyonu, derin öğrenme, sistem entegrasyonu | Sistem seviyesi mimariye ışık tuttu, simülasyon kullanımını doğruladı |
 | **Drone-vs-bird ayırt etme** | Radar micro-Doppler, kinematik özellikler, şekil kararlılığı | Discriminator özellik seçimini yönlendirdi |
+| **IRST kapalı-döngü ROI** (Sage J. Aerospace 2019; ScienceDirect grid-density+KCF 2022; IRSDT 2023) | "Kalman ile ROI tahmini + kayıp telafisi", track-before-detect vs detect-before-track | **Kapalı-döngü cued recovery (§2.9)** tasarımını doğruladı |
+| **PDAF** (Bar-Shalom & Tse; "The Probabilistic Data Association Filter" IEEE CSM 2009) | Tek hedef + clutter'da Bayesçi yumuşak ilişkilendirme; NN'e üstünlük (2 sahte ölçümde NN ~1/3 iz kaybı), veri kaybında daha iyi | **PDAF (§2.10)** formülasyonu + clutter dayanıklılığı |
 
 ---
 
@@ -572,12 +660,15 @@ ctest --test-dir build -R tracker
 
 1. ✅ **Hız çıktısı fix'i** (Kalata α-β, px/s, fps-değişmez) — yapıldı.
 2. ✅ **Gerçek-veri değerlendirme aracı** `video_eval` (MP4 + opsiyonel GT CSV → metrikler, headless) — yapıldı.
-3. ✅ **IMM** (`ImmTracker`, iki α-β modelli hafif IMM) — yapıldı (varsayılan α-β; IMM swappable).
-4. **Gerçek veri doğrulama**: `videos/` klipleri + (varsa) GT etiketleriyle `video_eval` koşturup LCM/IMM faydasını gerçek arka planda ölçmek. ← *sıradaki ana iş*
-5. **Simülatör entegrasyonu**: AirSim/Gazebo → RTSP/UDP → `VideoCameraSource`.
-6. **Gerçek donanım**: ARM üzerinde `VideoCameraSource("/dev/video0")` + V4L2 IMU.
-7. **Performans optimizasyonu**: SIMD (NEON), cache-aware veri yapıları, ARM-specific tuning.
-8. **Açık veriseti doğrulama**: MOT-FLY / Det-Fly (MOT formatı `video_eval --gt` ile doğrudan).
+3. ✅ **IMM** (`ImmTracker`, iki Kalman modelli) — yapıldı (swappable).
+4. ✅ **Kapalı-döngü cued tracking (§2.9)** — track→detect geri besleme + ROI kurtarma; worst recall 0.84→1.00, coast %10→%0.
+5. ✅ **PDAF (§2.10)** — clutter-dayanıklı yumuşak ilişkilendirme (varsayılan); ID kararlılığı NN 5→1.
+6. **Gerçek veri doğrulama**: `videos/` klipleri + (varsa) GT etiketleriyle `video_eval` koşturup cued recovery/PDAF/LCM faydasını gerçek arka planda ölçmek. ← *sıradaki ana iş*
+7. **Simülatör entegrasyonu**: AirSim/Gazebo → RTSP/UDP → `VideoCameraSource`.
+8. **Gerçek donanım**: ARM üzerinde `VideoCameraSource("/dev/video0")` + V4L2 IMU.
+9. **Performans optimizasyonu**: SIMD (NEON), cache-aware veri yapıları; pipeline yoklama
+   (200µs sleep-poll) yerine bloklamalı bekleme ile stage-handoff latency'sini kısmak.
+10. **Açık veriseti doğrulama**: MOT-FLY / Det-Fly (MOT formatı `video_eval --gt` ile doğrudan).
 
 ---
 
@@ -590,14 +681,44 @@ paradigmasının duvarlarıdır. Ancak ikinci modalite (radar micro-Doppler) vey
 1. **2-6 px'te sınıflandırma (drone vs kuş vs çöp) imkânsız** — bu boyutta şekil/doku
    bilgisi yok denecek kadar az. Sistem bu yüzden "cued tracking" çerçevesinde; sınıf-
    landırmaya girmiyor.
-2. **Aynı anda sönük + küçük + sert-manevralı hedef** (worst, recall 0.84): tek-kare
-   tespit düşük SNR'da çöker (TBD ister), TBD ise öngörülebilir hareket ister, sert
-   manevra onu bozar. İki gereksinim çelişir → fiziksel duvar.
-3. **Havada asılı / sıfır-hızlı hedef**: pipeline belkemiği hareket (MOG2 + ego-telafi);
-   hareketsiz hedef ego-telafisinden sonra arka plana karışır → yapısal olarak görünmez.
+2. **Aynı anda sönük + küçük + sert-manevralı hedef** (worst, *ham* tek-kare recall ~0.84):
+   tek-kare global tespit düşük SNR'da çöker. Bu duvar *acquisition'da* (kilitten önce) hâlâ
+   geçerli. ANCAK **kilitten sonra** kapalı-döngü cued recovery (§2.9) bu kaçırmaları tahmin
+   ROI'sinden kurtardığı için sistem-seviyesi recall 1.00, coast %0 → "kesintisiz takip"
+   hedefi pratikte sağlandı. (Asıl iş zaten *cued tracking*, sınırsız acquisition değil.)
+3. **Havada asılı / sıfır-hızlı hedef**: global belkemiği hareket (MOG2 + ego-telafi);
+   hareketsiz hedef ego-telafisinden sonra arka plana karışır. Kapalı-döngü ROI kurtarma
+   MOG2-AND şartını ROI'de düşürdüğü için (track-before-detect) *kilitliyken* hover'ı
+   uzamsal saliency'den (top-hat) yakalayabilir; ama *kilitten önce* hover hâlâ görünmez.
 4. **Parallaks / non-planar arka plan**: stabilizasyon uzak düzlemsel arka plan varsayar
    (similarity); FOV'a 3B yapı (yer/bina) girerse tek homografi hizalayamaz → artık
    parallaks FP. Tek kameradan derinlik olmadan baştan önlenemez (M-of-N ile sonradan elenir).
 5. **Sentetik ↔ gerçek uçurumu**: §5 sayıları idealize sentetik sahnededir (tek hedef,
    Gaussian leke, düzlemsel gökyüzü). Gerçek-dünya rakamları için `video_eval` + etiketli
    klip şarttır; recall=1.0 gerçek veride bu kadar yüksek olmayabilir.
+   **Somut ölçüm (7 Haz 2026, `video_eval videos/flight_02_clip...mp4`, GT'siz)**: kapalı-döngü
+   gerçek videoda çöksüz koşar (~52 FPS, x86), ANCAK **~560 tespit/kare, ~82 iz/kare** üretir.
+   Sebep: gerçek klipte IMU yok → stabilizasyon saf-OF → titreşimde artık hareket → MOG2 her
+   yerde tetikler (clutter seli). Cued recovery + PDAF *birincil* izi korur ama clutter selini
+   *bastırmaz*. Bu bir DETEKTÖR/EŞİK ayarı problemidir ve GT olmadan sorumluca çözülemez
+   ("tahmin-ayarı" recall'ı bozma riski taşır). Doğru sıralı çözüm: etiketli klip → `video_eval`
+   ile LCM eşiği / CFAR-tipi adaptif eşik / max-iz sınırı tuning (bkz. §11.6). Mimari (kapalı-
+   döngü + PDAF) bu işe hazır; eksik olan veridir, kod değil.
+
+   **Seyrek-GT ölçümü (7 Haz 2026, flight_02_clip, 14 kare elle işaretli, hedef=zeplin/balon):**
+   Klip aslında *yavaş büyük bir zeplin* içeriyor (2-6px dron değil) — `SkyRegionDetector`
+   tam bu rejim için. Gerçek sayılar (match=80px):
+   - `mog` detektör: arazide ~560 tespit/kare sel → kullanılamaz (yanlış araç).
+   - `sky` detektör (baseline): zeplin recall **0.21**, continuity **0.14**, trk RMS 70px →
+     zeplin yavaş olduğu için hareket-tabanlı (frame-diff) tespit onu çoğunlukla kaçırıyor.
+   - **Denenen ve GERİ ALINAN iyileştirmeler** (GT olmadan "kazanım" sanılırdı):
+     (a) gökyüzü-kapılı dark-saliency → marjinal + latency 2× + bulut-kenarı FP;
+     (b) sky cue-recovery → proxy %40 ama görselde sahte-iz uzatması, doğrulanamadı;
+     (c) gökyüzü-"delik" tespiti → zeplin recall **0.21→0.79** AMA FP **18/kare**, **35 iz/kare**
+     (kapalı bulut boşlukları da "delik") → görselde kullanılamaz. GT + görsel olmadan (c)
+     "harika kazanım" sanılırdı; **GT bunun aldatıcı olduğunu kanıtladı** → şart.
+   - **Dürüst sonuç**: zeplini bulut-boşluğu clutter'ından temiz ayırmak, çok-kareli hareket
+     tutarlılığı (zeplin bulut sürüklenmesinden BAĞIMSIZ hareket eder) veya daha zengin
+     görünüm/şekil modeli ister; her ikisi de YOĞUN GT ile geliştirilip doğrulanmalıdır.
+     Sentetik-doğrulanmış kazanımlar (kapalı-döngü cued recovery + PDAF) bağımsızca geçerli;
+     bu gerçek-klip ayrımı ayrı bir araştırma kalemidir (§11.6).

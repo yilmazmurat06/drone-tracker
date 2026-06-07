@@ -10,6 +10,7 @@
 // Not: "drone mu?" kararı burada KESİNLEŞMEZ. Detektör aday üretir; çoklu-özellik
 // skorlama (Problem 3) ve kinematik kapı (Problem 4) sonraki aşamalarda devreye girer.
 
+#include "dtrack/common/cue.hpp"
 #include "dtrack/common/types.hpp"
 
 #include <vector>
@@ -23,6 +24,12 @@ public:
     // Stabilize kareden ham tespit adaylarını çıkar. Detection.centroid GÜNCEL
     // (canlı) görüntü koordinatındadır (uçuş kontrolcüsü canlı kareyi referans alır).
     virtual std::vector<common::Detection> detect(const common::StabilizedFrame& sf) = 0;
+
+    // Kapalı-döngü geri besleme: tracker'ın bir sonraki kare için hedef tahmini
+    // (bkz. common/cue.hpp). Bir SONRAKİ detect() çağrısında, global tespit kapı
+    // içinde aday bulamazsa bu ROI'de düşük eşikli kurtarma yapılır. Cue'yu
+    // kullanmayan detektörler için no-op (varsayılan).
+    virtual void set_cue(const common::TargetCue& /*cue*/) {}
 
     // Son işlenen kareyi, detektörün KARARLI (referans) koordinatına eşleyen 3x3
     // dönüşüm. Tracking bunu kullanarak ego-jitter'dan arınmış, pürüzsüz koordinatta

@@ -86,8 +86,7 @@ void ImmTracker::mix_predict(TrackImpl& t, double dt) const {
 }
 
 // IMM adım 4-5: her modeli Kalman düzelt, S-olabilirliğinden mod olasılığı güncelle.
-void ImmTracker::correct(TrackImpl& t, const common::Detection& z) const {
-    const double r = cfg_.meas_noise_std * cfg_.meas_noise_std;
+void ImmTracker::correct(TrackImpl& t, const common::Detection& z, double r) const {
     const double zx = z.centroid.x, zy = z.centroid.y;
 
     // Olabilirlik Λ_j = N(y; 0, S_j) — DÜZELTMEDEN ÖNCE (predicted S ile).
@@ -152,6 +151,12 @@ std::vector<common::Track> ImmTracker::update(
     has_last_ = true;
 
     const double r = cfg_.meas_noise_std * cfg_.meas_noise_std;
+    // Per-tespit ölçüm gürültüsü R (kapalı-döngü kurtarma tespitleri daha gürültülü).
+    std::vector<double> rd(detections.size(), r);
+    for (size_t di = 0; di < detections.size(); ++di) {
+        if (detections[di].meas_std > 0.0f)
+            rd[di] = static_cast<double>(detections[di].meas_std) * detections[di].meas_std;
+    }
 
     // --- 1) MIX + PREDICT (her track, her model). ---
     for (auto& t : tracks_) {
@@ -173,8 +178,8 @@ std::vector<common::Track> ImmTracker::update(
         int prio = 0;
         if (trk.status == common::TrackStatus::Confirmed) prio = 2;
         else if (trk.status == common::TrackStatus::Tentative) prio = 1;
-        const double Sx = trk.cPx00 + r, Sy = trk.cPy00 + r;
         for (size_t di = 0; di < nd; ++di) {
+            const double Sx = trk.cPx00 + rd[di], Sy = trk.cPy00 + rd[di];
             const double yx = trk.cpx - detections[di].centroid.x;
             const double yy = trk.cpy - detections[di].centroid.y;
             const double nis = yx * yx / Sx + yy * yy / Sy;
@@ -197,7 +202,7 @@ std::vector<common::Track> ImmTracker::update(
         const int ti = det_to_track[di];
         if (ti >= 0) {
             auto& tr = tracks_[ti];
-            correct(tr, detections[di]);
+            correct(tr, detections[di], rd[di]);
             ++tr.hits;
             tr.time_since_update = 0;
             tr.consecutive_miss = 0;

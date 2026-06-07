@@ -24,6 +24,7 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
 
+#include "dtrack/common/cue.hpp"
 #include "dtrack/common/time.hpp"
 #include "dtrack/common/types.hpp"
 #include "dtrack/detection/detect_stage.hpp"
@@ -155,10 +156,12 @@ int main() {
     auto vdq = std::make_shared<common::SpscRingBuffer<common::FrameDetections>>(8);
     auto vtq = std::make_shared<common::SpscRingBuffer<common::FrameTracks>>(8);
 
+    // Kapalı-döngü cue yan kanalı: TrackStage iz tahminini yazar, DetectStage okur.
+    auto vcue = std::make_shared<common::CueBoard>();
     auto cam_s = std::make_shared<io::CameraStage>(cam_vis);
     auto stab_s = std::make_shared<stabilization::StabilizeStage>(stab_vis, imu_vis);
-    auto det_s = std::make_shared<detection::DetectStage>(det_vis, disc_vis);
-    auto trk_s = std::make_shared<tracking::TrackStage>(trk_vis);
+    auto det_s = std::make_shared<detection::DetectStage>(det_vis, disc_vis, vcue);
+    auto trk_s = std::make_shared<tracking::TrackStage>(trk_vis, vcue);
 
     cam_s->connect(nullptr, vfq);
     stab_s->connect(vfq, vsq);
@@ -190,10 +193,11 @@ int main() {
     auto tdq = std::make_shared<common::SpscRingBuffer<common::FrameDetections>>(8);
     auto ttq = std::make_shared<common::SpscRingBuffer<common::FrameTracks>>(8);
 
+    auto tcue = std::make_shared<common::CueBoard>();
     auto cam_ts = std::make_shared<io::CameraStage>(cam_thm);
     auto stab_ts = std::make_shared<stabilization::StabilizeStage>(stab_thm, imu_thm);
-    auto det_ts = std::make_shared<detection::DetectStage>(det_thm, disc_thm);
-    auto trk_ts = std::make_shared<tracking::TrackStage>(trk_thm);
+    auto det_ts = std::make_shared<detection::DetectStage>(det_thm, disc_thm, tcue);
+    auto trk_ts = std::make_shared<tracking::TrackStage>(trk_thm, tcue);
 
     cam_ts->connect(nullptr, tfq);
     stab_ts->connect(tfq, tsq);

@@ -32,6 +32,7 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
 
+#include "dtrack/common/cue.hpp"
 #include "dtrack/common/time.hpp"
 #include "dtrack/common/types.hpp"
 #include "dtrack/detection/mog_detector.hpp"
@@ -146,6 +147,7 @@ int main(int argc, char** argv) {
         auto sf = stab.stabilize(frame, {});            // IMU yok -> saf OF
         auto dets = det->detect(sf);
         auto tracks = tracker.update(dets, frame->stamp);
+        det->set_cue(common::make_cue(tracks));         // kapalı-döngü geri besleme
         auto t1 = Clock::now();
         const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 

@@ -12,6 +12,7 @@
 #include <optional>
 #include <vector>
 
+#include "dtrack/common/cue.hpp"
 #include "dtrack/common/types.hpp"
 #include "dtrack/detection/detector.hpp"
 #include "dtrack/detection/discriminator.hpp"
@@ -22,9 +23,13 @@ namespace dtrack::detection {
 class DetectStage
     : public pipeline::Stage<common::StabilizedFrame, common::FrameDetections> {
 public:
+    // cue_board verilirse (kapalı-döngü): her karede tracker'ın güncel iz tahmini
+    // okunup detektöre verilir -> global tespit kaçırırsa tahmin ROI'sinde kurtarma.
     explicit DetectStage(std::shared_ptr<IDetector> det,
-                          std::shared_ptr<IDiscriminator> disc = nullptr)
-        : Stage("detect"), det_(std::move(det)), disc_(std::move(disc)) {}
+                          std::shared_ptr<IDiscriminator> disc = nullptr,
+                          std::shared_ptr<common::CueBoard> cue_board = nullptr)
+        : Stage("detect"), det_(std::move(det)), disc_(std::move(disc)),
+          cue_board_(std::move(cue_board)) {}
 
 protected:
     std::optional<common::FrameDetections> process(
@@ -32,6 +37,8 @@ protected:
         if (!sf.frame) return std::nullopt;
         // Kareyi de taşı: aşağı akış (tracking, görselleştirme) görüntüye ihtiyaç duyar.
         // Boş tespit listesi de geçerli çıktıdır -> emit edilir (tracker her kare tıklar).
+        // Kapalı-döngü: detect()'ten ÖNCE tracker'ın son iz tahminini detektöre ver.
+        if (cue_board_) det_->set_cue(cue_board_->read());
         // detect() önce çağrılmalı (referans dönüşümünü o kareye göre günceller).
         auto dets = det_->detect(sf);
         if (disc_) disc_->score(dets);
@@ -42,6 +49,7 @@ protected:
 private:
     std::shared_ptr<IDetector> det_;
     std::shared_ptr<IDiscriminator> disc_;
+    std::shared_ptr<common::CueBoard> cue_board_;
 };
 
 }  // namespace dtrack::detection
