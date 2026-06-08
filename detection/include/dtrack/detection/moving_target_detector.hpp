@@ -54,6 +54,24 @@ public:
         int    sky_s_max     = 70;     // azami doygunluk (S) → "soluk/bulut"
         int    sky_dilate    = 7;      // maskeyi genişlet: küçük koyu hedef gök içinde sayılsın
                                        // (büyük tutarsan ağaç-gök sınırı sızar)
+        // Gate kararı (Issue #13): blobun ÇEVRE HALKASI (ring) gök mü? Blobu sky_ring
+        // piksel şişir, halkanın ham-gök (sky_raw) oranına bak. Hava hedefi (koyu gondol)
+        // çevresi gökle sarılı → geçer; ufuk ağaç-tepesi altı zemin → oran düşük → elenir.
+        // sky_overlap_min: halka için asgari gök oranı (0=kapalı). sky_ring: halka payı (px).
+        double sky_overlap_min = 0.6;
+        int    sky_ring        = 6;
+        // --- yerel kontrast (top-hat) dalı: SOLUK/KÜÇÜK hedefi MEKÂNSAL yakalar ---
+        // absdiff, parlak cismi parlak bulut önünde göremez (zaman-farkı Δ küçük).
+        // Top-hat: çevresinden PARLAK (white-hat) VEYA KOYU (black-hat) kompakt
+        // yapıları öne çıkarır → uzak uçak-noktası / zeplinin koyu detayları. Yalnız
+        // gök maskesi içinde uygulanır (zemin dokusu sel olmaz). çekirdekten BÜYÜK
+        // cisimler (bulut) bastırılır; küçük/keskin hedef geçer.
+        bool   tophat        = true;
+        int    tophat_ksize  = 13;     // yapısal eleman: bundan küçük cisimler öne çıkar
+        int    tophat_thresh = 35;     // saliency eşiği [0-255] (küçük = hassas)
+        int    tophat_mode   = 1;      // 0=her ikisi  1=yalnız KOYU(black-hat)  2=yalnız PARLAK(white-hat)
+                                       // gerçek bulut dokusu çoğu parlak-benek → 1 (koyu) gürültüyü kırpar
+                                       // (hava hedefleri -dron/uçak/zeplin gondolu- genelde gökten KOYU)
         // --- silüet kutusu (tüm cismi kaplayan bbox) ---
         // Hareket maskesi cismin yalnız kenarını görür. Gök önünde silüet =
         // ¬sky'ın, hedef merkezini içeren bağlı bileşeni → tam sınırlayıcı kutu.

@@ -150,21 +150,11 @@ bool MovingTargetDetector::detect(const Frame& in, std::vector<Detection>& out) 
     // Model ısınana kadar tespitlere güvenme (MOG2 ilk karelerde her şeyi fg sayar).
     if (seen_ <= p_.warmup) return false;
 
-    // --- Morfoloji: aç (gürültü sil) → kapat (blob içini birleştir).
-    if (p_.open_ksize > 1) {
-        const cv::Mat k = cv::getStructuringElement(
-            cv::MORPH_ELLIPSE, {p_.open_ksize, p_.open_ksize});
-        cv::morphologyEx(mask, mask, cv::MORPH_OPEN, k);
-    }
-    if (p_.close_ksize > 1) {
-        const cv::Mat k = cv::getStructuringElement(
-            cv::MORPH_ELLIPSE, {p_.close_ksize, p_.close_ksize});
-        cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, k);
-    }
-
-    // --- Gökyüzü kapısı: zemin paralaksını elemek için sky maskesi (tüm kare).
-    // gökyüzü = parlak ∧ (soluk ∨ mavi). Genişletilir ki küçük koyu hedef
-    // (kendi pikseli karanlık olsa da) çevreleyen gök sayesinde içeride sayılsın.
+    // --- Gökyüzü kapısı (sky gate): zemin paralaksını elemek için sky maskesi.
+    //   Top-hat dalından ÖNCE hesaplanır → saliency yalnız gök içinde aranır.
+    //   gökyüzü = parlak ∧ (soluk ∨ mavi). Yeşil/doygun zemin reddedilir.
+    //   `sky`     = dilate'li → kapı (gate) ve top-hat maskesi için.
+    //   `sky_raw` = dilate'siz → silüet (expand_to_silhouette) için.
     cv::Mat sky, sky_raw;
     if (p_.sky_gate && in.image.channels() == 3) {
         cv::Mat hsv, ch[3];
@@ -183,6 +173,43 @@ bool MovingTargetDetector::detect(const Frame& in, std::vector<Detection>& out) 
         }
     }
 
+    // --- Top-hat dalı: SOLUK/KÜÇÜK hedefi MEKÂNSAL kontrastla yakala.
+    //   absdiff/MOG2 parlak zeplini parlak bulut önünde kaçırır (Δ küçük); ama
+    //   cisim çevresinden ayrıktır. white-hat (çevreden parlak) ∪ black-hat
+    //   (çevreden koyu) → iki yönü de yakala. Yalnız gök içinde (sky) uygula ki
+    //   zemin/ağaç dokusu sel olmasın. Bu dal HER karede çalışır (hareket
+    //   gerekmez) → soluk hedef kararlı blob verir, M-of-N onayını doldurabilir.
+    if (p_.tophat && p_.tophat_ksize > 1) {
+        const cv::Mat k = cv::getStructuringElement(
+            cv::MORPH_ELLIPSE, {p_.tophat_ksize, p_.tophat_ksize});
+        cv::Mat sal;
+        if (p_.tophat_mode == 1) {                            // yalnız KOYU (çevreden koyu cisim)
+            cv::morphologyEx(gray, sal, cv::MORPH_BLACKHAT, k);
+        } else if (p_.tophat_mode == 2) {                     // yalnız PARLAK
+            cv::morphologyEx(gray, sal, cv::MORPH_TOPHAT, k);
+        } else {                                              // her ikisi → en güçlüsü
+            cv::Mat what, bhat;
+            cv::morphologyEx(gray, what, cv::MORPH_TOPHAT,   k);  // gray - open  : çevreden parlak
+            cv::morphologyEx(gray, bhat, cv::MORPH_BLACKHAT, k);  // close - gray : çevreden koyu
+            cv::max(what, bhat, sal);                            // iki yönün en güçlüsü
+        }
+        cv::Mat sal_mask = sal > p_.tophat_thresh;            // 0/255, tam kare
+        if (!sky.empty()) cv::bitwise_and(sal_mask, sky, sal_mask);  // yalnız gök içi
+        cv::bitwise_or(mask, sal_mask(roi), mask);            // ROI'ye kırp, hareket maskesine ekle
+    }
+
+    // --- Morfoloji: aç (gürültü sil) → kapat (blob içini birleştir).
+    if (p_.open_ksize > 1) {
+        const cv::Mat k = cv::getStructuringElement(
+            cv::MORPH_ELLIPSE, {p_.open_ksize, p_.open_ksize});
+        cv::morphologyEx(mask, mask, cv::MORPH_OPEN, k);
+    }
+    if (p_.close_ksize > 1) {
+        const cv::Mat k = cv::getStructuringElement(
+            cv::MORPH_ELLIPSE, {p_.close_ksize, p_.close_ksize});
+        cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, k);
+    }
+
     // --- Connected components → aday blob'lar.
     cv::Mat labels, stats, centroids;
     const int n = cv::connectedComponentsWithStats(mask, labels, stats, centroids, 8);
@@ -199,11 +226,21 @@ bool MovingTargetDetector::detect(const Frame& in, std::vector<Detection>& out) 
         const float gx = static_cast<float>(centroids.at<double>(i, 0) + roi.x);
         const float gy = static_cast<float>(centroids.at<double>(i, 1) + roi.y);
 
-        // Gökyüzü kapısı: merkez gök maskesinde değilse (zemin/ağaç) ele.
-        if (!sky.empty()) {
-            const int cx = std::min(std::max(0, cvRound(gx)), sky.cols - 1);
-            const int cy = std::min(std::max(0, cvRound(gy)), sky.rows - 1);
-            if (sky.at<uchar>(cy, cx) == 0) continue;
+        // Gökyüzü kapısı (Issue #13): "ÇEVRE (ring) gök mü?" testi.
+        // NEDEN merkez/öz-örtüşme değil: hava hedefi (koyu gondol, dron) KENDİ pikselleri
+        // koyudur → gök sayılmaz; ama ÇEVRESİ gökle sarılıdır. Ufuk ağaç-tepesinin ise
+        // üstü gök, ALTI zemindir → çevre gök oranı düşük. Blobu R piksel şişirip
+        // (çevre halkası) bu halkanın ham-gök (sky_raw) oranına bakarız.
+        //   gondol  → halka ~tamamı gök → geçer
+        //   ağaç-tepesi → halkanın altı zemin → oran düşük → elenir
+        if (!sky_raw.empty() && p_.sky_overlap_min > 0.0) {
+            const int R = p_.sky_ring;
+            cv::Rect gb(x + roi.x, y + roi.y, w, h);                       // global blob kutusu
+            cv::Rect eb(gb.x - R, gb.y - R, gb.width + 2 * R, gb.height + 2 * R);
+            eb &= cv::Rect(0, 0, sky_raw.cols, sky_raw.rows);             // kareye kırp
+            const double ring = std::max(1.0, eb.area() - area);          // halka alanı (blob hariç)
+            const double ring_sky = cv::countNonZero(sky_raw(eb));        // halkadaki gök (blob koyu→~0 katkı)
+            if (ring_sky / ring < p_.sky_overlap_min) continue;
         }
 
         Detection d;

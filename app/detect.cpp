@@ -35,6 +35,10 @@ struct Args {
     double speed = 1.0;
     bool show_mask = false;   // --mask: sağda birleşik tespit maskesini de göster
     cv::Rect roi;             // --roi x,y,w,h: cue-odaklı arama bölgesi (boş = tüm kare)
+    // top-hat (yerel kontrast) dalı — hızlı deneme için CLI'dan ayarlanabilir
+    bool th_set = false;
+    bool tophat = true;
+    int  tophat_thresh = 20, tophat_ksize = 13, tophat_mode = 0;
 };
 
 Args parse_args(int argc, char** argv) {
@@ -46,6 +50,10 @@ Args parse_args(int argc, char** argv) {
         else if (s == "--max-frames" && i + 1 < argc) a.max_frames = std::stoi(argv[++i]);
         else if (s == "--speed" && i + 1 < argc) a.speed = std::stod(argv[++i]);
         else if (s == "--mask") a.show_mask = true;
+        else if (s == "--no-tophat") { a.tophat = false; a.th_set = true; }
+        else if (s == "--tophat-thresh" && i + 1 < argc) { a.tophat_thresh = std::stoi(argv[++i]); a.th_set = true; }
+        else if (s == "--tophat-ksize"  && i + 1 < argc) { a.tophat_ksize  = std::stoi(argv[++i]); a.th_set = true; }
+        else if (s == "--tophat-mode"   && i + 1 < argc) { a.tophat_mode   = std::stoi(argv[++i]); a.th_set = true; }
         else if (s == "--roi" && i + 1 < argc) {
             int x, y, w, h;
             if (std::sscanf(argv[++i], "%d,%d,%d,%d", &x, &y, &w, &h) == 4)
@@ -67,7 +75,16 @@ int main(int argc, char** argv) {
     const bool have_telem = telem.load(args.prefix + ".telemetry.csv");
 
     dtrack::GyroFlowStabilizer stab;
-    dtrack::MovingTargetDetector det;
+    dtrack::MovingTargetDetector::Params det_p;
+    if (args.th_set) {
+        det_p.tophat        = args.tophat;
+        det_p.tophat_thresh = args.tophat_thresh;
+        det_p.tophat_ksize  = args.tophat_ksize;
+        det_p.tophat_mode   = args.tophat_mode;
+        std::cerr << "TOPHAT: on=" << det_p.tophat << " thresh=" << det_p.tophat_thresh
+                  << " ksize=" << det_p.tophat_ksize << " mode=" << det_p.tophat_mode << "\n";
+    }
+    dtrack::MovingTargetDetector det(det_p);
     if (!args.roi.empty()) {
         det.set_roi(args.roi);
         std::cerr << "CUE: arama bolgesi " << args.roi << " ile sinirli\n";
