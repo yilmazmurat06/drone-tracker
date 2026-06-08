@@ -40,7 +40,11 @@ struct Args {
     double speed = 1.0;
     bool show_tentative = false;
     cv::Rect roi;
-    float score_thresh = 0.50f;  // P3: bu eşiğin altındaki adaylar tracker'a gitmez
+    float score_thresh  = 0.70f;  // P3: bu eşiğin altındaki adaylar tracker'a gitmez
+    // Tracker parametreleri (CLI'dan ayarlanabilir; varsayılanlar MultiTargetTracker::Params ile eşleşmeli)
+    double gate_dist    = 25.0;
+    int    confirm_hits = 5;
+    double min_travel   = 25.0;
 };
 
 Args parse_args(int argc, char** argv) {
@@ -57,7 +61,10 @@ Args parse_args(int argc, char** argv) {
             if (std::sscanf(argv[++i], "%d,%d,%d,%d", &x, &y, &w, &h) == 4)
                 a.roi = cv::Rect(x, y, w, h);
         }
-        else if (s == "--score-thresh" && i + 1 < argc) a.score_thresh = std::stof(argv[++i]);
+        else if (s == "--score-thresh"  && i + 1 < argc) a.score_thresh  = std::stof(argv[++i]);
+        else if (s == "--gate-dist"     && i + 1 < argc) a.gate_dist     = std::stod(argv[++i]);
+        else if (s == "--confirm-hits"  && i + 1 < argc) a.confirm_hits  = std::stoi(argv[++i]);
+        else if (s == "--min-travel"    && i + 1 < argc) a.min_travel    = std::stod(argv[++i]);
         else if (!s.empty() && s[0] != '-' && !pset) { a.prefix = s; pset = true; }
     }
     return a;
@@ -76,7 +83,11 @@ int main(int argc, char** argv) {
     dtrack::GyroFlowStabilizer stab;
     dtrack::MovingTargetDetector det;
     dtrack::ClutterDiscriminator disc;
-    dtrack::MultiTargetTracker trk;
+    dtrack::MultiTargetTracker::Params trk_p;
+    trk_p.gate_dist    = args.gate_dist;
+    trk_p.confirm_hits = args.confirm_hits;
+    trk_p.min_travel   = args.min_travel;
+    dtrack::MultiTargetTracker trk(trk_p);
     if (!args.roi.empty()) det.set_roi(args.roi);
 
     const double fps = video.fps();

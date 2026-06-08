@@ -32,8 +32,8 @@ namespace dtrack {
 class MultiTargetTracker : public ITracker {
 public:
     struct Params {
-        double gate_dist    = 45.0;  // ilişkilendirme kapısı (piksel) — bundan uzak eşleşmez
-        int    confirm_hits = 4;     // Tentative→Confirmed için gereken asgari isabet
+        double gate_dist    = 25.0;  // ilişkilendirme kapısı (piksel) — bundan uzak eşleşmez
+        int    confirm_hits = 5;     // Tentative→Confirmed için gereken asgari isabet
         double min_travel   = 25.0;  // onay için doğuştan asgari NET yer değiştirme (px).
                                      // KRİTİK: yerinde titreşen paralaks kümeleri elenir;
                                      // yalnız gerçekten yol alan hedefler onaylanır.
