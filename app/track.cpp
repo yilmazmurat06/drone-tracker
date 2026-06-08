@@ -13,6 +13,7 @@
 //    dtrack_track [prefix] [--save out.mp4] [--dump N] [--max-frames N]
 //                 [--speed S] [--show-tentative] [--roi x,y,w,h]
 // ============================================================================
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <iostream>
@@ -23,6 +24,7 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
 
+#include "dtrack/detection/clutter_discriminator.hpp"
 #include "dtrack/detection/moving_target_detector.hpp"
 #include "dtrack/io/recorded_frame_source.hpp"
 #include "dtrack/io/telemetry_log.hpp"
@@ -38,6 +40,7 @@ struct Args {
     double speed = 1.0;
     bool show_tentative = false;
     cv::Rect roi;
+    float score_thresh = 0.50f;  // P3: bu eşiğin altındaki adaylar tracker'a gitmez
 };
 
 Args parse_args(int argc, char** argv) {
@@ -54,6 +57,7 @@ Args parse_args(int argc, char** argv) {
             if (std::sscanf(argv[++i], "%d,%d,%d,%d", &x, &y, &w, &h) == 4)
                 a.roi = cv::Rect(x, y, w, h);
         }
+        else if (s == "--score-thresh" && i + 1 < argc) a.score_thresh = std::stof(argv[++i]);
         else if (!s.empty() && s[0] != '-' && !pset) { a.prefix = s; pset = true; }
     }
     return a;
@@ -71,6 +75,7 @@ int main(int argc, char** argv) {
 
     dtrack::GyroFlowStabilizer stab;
     dtrack::MovingTargetDetector det;
+    dtrack::ClutterDiscriminator disc;
     dtrack::MultiTargetTracker trk;
     if (!args.roi.empty()) det.set_roi(args.roi);
 
@@ -99,6 +104,12 @@ int main(int argc, char** argv) {
 
         std::vector<dtrack::Detection> dets;
         det.detect(warped, dets);
+
+        // P3: her adaya skor ver, eşiğin altını ele (clutter reddi).
+        for (auto& d : dets) d.score = disc.score(d);
+        dets.erase(std::remove_if(dets.begin(), dets.end(),
+                       [&](const dtrack::Detection& d){ return d.score < args.score_thresh; }),
+                   dets.end());
 
         std::vector<dtrack::Track> tracks;
         trk.update(dets, tracks);
