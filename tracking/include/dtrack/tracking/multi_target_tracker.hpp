@@ -19,6 +19,7 @@
 //    eşleşmeyen track → misses++ (Kalman tahminiyle "coasting"). misses >
 //    max_misses → Lost → silinir.
 // ============================================================================
+#include <deque>
 #include <vector>
 
 #include <opencv2/core.hpp>
@@ -40,6 +41,13 @@ public:
         int    max_misses   = 5;     // ardışık kaçış > bu → Lost (coasting hayaletini kısalt)
         float  process_noise = 1.0f; // Q: model belirsizliği (büyük = daha çevik)
         float  measure_noise = 4.0f; // R: ölçüm gürültüsü (büyük = tespite az güven)
+        // --- hız tutarlılık filtresi (velocity consistency) ---
+        // Onaylanmış iz karede kareye ne kadar ivmeleniyor?
+        // Drone: motor tahrikli → düzgün → düşük ivme varyansı.
+        // Paralaks blobu: gürültülü kenar tespiti → sıçrayan → yüksek varyans.
+        int    vel_history_n   = 8;    // kaç kare hız geçmişi tutulsun
+        float  max_accel_sigma = 4.0f; // px/kare: ivme standart sapması eşiği
+        float  max_angle_sigma = 0.8f; // radyan: yön açısı standart sapması eşiği (~±46°)
     };
 
     MultiTargetTracker();
@@ -56,7 +64,8 @@ private:
     struct Internal {
         Track          t;
         cv::KalmanFilter kf;
-        cv::Point2f      birth;   // doğum konumu → net yer değiştirme ölçümü
+        cv::Point2f      birth;        // doğum konumu → net yer değiştirme ölçümü
+        std::deque<cv::Point2f> vel_hist; // son N karedeki Kalman hız vektörleri
     };
 
     void init_kf(Internal& in, const cv::Point2f& p) const;

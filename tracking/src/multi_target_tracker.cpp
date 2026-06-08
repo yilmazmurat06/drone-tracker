@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 namespace dtrack {
 
@@ -84,6 +85,11 @@ void MultiTargetTracker::update(const std::vector<Detection>& dets,
         if (in.t.status == Track::Status::Tentative &&
             in.t.hits >= p_.confirm_hits && travel >= p_.min_travel)
             in.t.status = Track::Status::Confirmed;
+
+        // Hız geçmişini güncelle: son vel_history_n hızı tut.
+        in.vel_hist.push_back(in.t.vel);
+        if (static_cast<int>(in.vel_hist.size()) > p_.vel_history_n)
+            in.vel_hist.pop_front();
     }
 
     // --- 3b) Eşleşmeyen track'ler → coasting (tahminle yaşa), misses++.
@@ -118,7 +124,51 @@ void MultiTargetTracker::update(const std::vector<Detection>& dets,
         tracks_.push_back(std::move(in));
     }
 
-    // --- 4) Yaşam yönetimi: çok kaçıran track'i sil.
+    // --- 4a) Hız tutarlılık filtresi: onaylanmış ama titreyen izleri düşür.
+    // Ard arda gelen hız vektörleri arasındaki farkın (ivme) standart sapmasını
+    // hesapla. Yüksek σ → kenar gürültüsünden doğan paralaks blobu; düşür.
+    // Drone motorla ilerler → ivme küçük ve tutarlı → σ düşük.
+    if (p_.vel_history_n >= 3) {
+        for (Internal& in : tracks_) {
+            if (in.t.status != Track::Status::Confirmed) continue;
+            if (static_cast<int>(in.vel_hist.size()) < p_.vel_history_n) continue;
+
+            // İki metrik hesapla:
+            // 1. İvme σ: |vel[i]-vel[i-1]| standart sapması (hız büyüklük tutarsızlığı)
+            // 2. Yön σ: hız açısının (atan2) standart sapması (yön tutarsızlığı)
+            // Drone: hem ivme hem yön tutarlı → ikisi de düşük.
+            // Paralaks blob: kenarda oluşur, yön frame'den frame'e değişir → yön σ yüksek.
+
+            std::vector<float> accels;
+            std::vector<float> angles;
+            accels.reserve(in.vel_hist.size() - 1);
+            angles.reserve(in.vel_hist.size());
+
+            for (const auto& v : in.vel_hist)
+                angles.push_back(std::atan2(v.y, v.x));  // radyan, [-π, π]
+            for (size_t i = 1; i < in.vel_hist.size(); ++i)
+                accels.push_back(static_cast<float>(
+                    cv::norm(in.vel_hist[i] - in.vel_hist[i - 1])));
+
+            auto sigma_of = [](const std::vector<float>& v) {
+                const float mean = std::accumulate(v.begin(), v.end(), 0.f)
+                                   / static_cast<float>(v.size());
+                float var = 0.f;
+                for (float x : v) var += (x - mean) * (x - mean);
+                return std::sqrt(var / static_cast<float>(v.size()));
+            };
+
+            const float accel_sigma = sigma_of(accels);
+            const float angle_sigma = sigma_of(angles);  // radyan
+
+            // Eşik: ivme VEYA yön fazla dağınıksa → clutter.
+            // angle_sigma > 0.8 rad ≈ ±46° sapma → tutarsız yön
+            if (accel_sigma > p_.max_accel_sigma || angle_sigma > p_.max_angle_sigma)
+                in.t.misses = p_.max_misses + 1;  // bir sonraki adımda silinecek
+        }
+    }
+
+    // --- 4b) Yaşam yönetimi: çok kaçıran track'i sil.
     tracks_.erase(
         std::remove_if(tracks_.begin(), tracks_.end(),
                        [&](const Internal& in) { return in.t.misses > p_.max_misses; }),
