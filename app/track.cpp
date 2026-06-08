@@ -51,6 +51,9 @@ struct Args {
     // Pilot hedefi merkeze alır → sistem yalnız bu kutudakine kilitlenir (manuel cue).
     // 0=kapalı. Örn. 0.4 → genişliğin ve yüksekliğin %40'ı (oran korunur).
     float lock_frac     = 0.f;
+    // Lock modunda P3 şekil-eşiği: kutu göğe nişanlandığı için YÜKSEK RECALL → tüm
+    // sky-gate'li adayları (her boy/şekilde hava aracı) kabul et. 0=hepsini al.
+    float lock_score    = 0.f;
     // Tracker parametreleri (CLI'dan ayarlanabilir; varsayılanlar MultiTargetTracker::Params ile eşleşmeli)
     double gate_dist    = 25.0;
     int    confirm_hits = 5;
@@ -84,6 +87,8 @@ Args parse_args(int argc, char** argv) {
         else if (s == "--score-thresh"  && i + 1 < argc) a.score_thresh  = std::stof(argv[++i]);
         else if (s == "--large-admit"   && i + 1 < argc) a.large_admit   = std::stof(argv[++i]);
         else if (s == "--lock"          && i + 1 < argc) a.lock_frac     = std::stof(argv[++i]);
+        else if (s == "--lock-score"    && i + 1 < argc) a.lock_score    = std::stof(argv[++i]);
+        else if (s == "--lock-score"    && i + 1 < argc) a.lock_score    = std::stof(argv[++i]);
         else if (s == "--gate-dist"     && i + 1 < argc) a.gate_dist     = std::stod(argv[++i]);
         else if (s == "--confirm-hits"  && i + 1 < argc) a.confirm_hits  = std::stoi(argv[++i]);
         else if (s == "--min-travel"    && i + 1 < argc) a.min_travel    = std::stod(argv[++i]);
@@ -161,12 +166,17 @@ int main(int argc, char** argv) {
         // nadir ve büyük olasılıkla gerçek hedef. Kararı tracker'ın zamansal tutarlılığına
         // (M-of-N + vel-consistency) bırak; clutter ise titreyeceği için orada elenir.
         for (auto& d : dets) d.score = disc.score(d);
+        // Lock modunda YÜKSEK RECALL: kutu operatör tarafından göğe nişanlandığı için
+        // P3 şekil-eşiğini düşür (lock_score, vars. 0 = tümünü al) → her boy/şekilde hava
+        // aracı (küçük planör, büyük FPV dron, zeplin) yakalanır. Clutter'ı ring-gate
+        // (zemin) + tracker zamansal tutarlılığı (titreyen bulut benekleri) eler.
+        const float eff_thresh = args.lock_frac > 0.f ? args.lock_score : args.score_thresh;
         // NOT: ölçüt d.area DEĞİL d.bbox alanı: top-hat yalnız koyu gondol/afiş
         // piksellerini sayar (area küçük), ama silüet kutusu (expand_to_silhouette)
         // tüm zeplini kaplar → büyük cismi bbox alanı yakalar.
         dets.erase(std::remove_if(dets.begin(), dets.end(),
                        [&](const dtrack::Detection& d){
-                           return d.score < args.score_thresh &&
+                           return d.score < eff_thresh &&
                                   d.bbox.area() < args.large_admit;
                        }),
                    dets.end());
