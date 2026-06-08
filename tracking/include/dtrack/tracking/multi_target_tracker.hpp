@@ -48,6 +48,11 @@ public:
         int    vel_history_n   = 8;    // kaç kare hız geçmişi tutulsun
         float  max_accel_sigma = 4.0f; // px/kare: ivme standart sapması eşiği
         float  max_angle_sigma = 0.8f; // radyan: yön açısı standart sapması eşiği (~±46°)
+        // (#12) Açı tutarlılığı YALNIZ yeterli hızda anlamlı: yavaş/yerinde duran hedefin
+        // hız vektörü ~0 → atan2 açısı rastgele → angle_sigma daima yüksek → yavaş gerçek
+        // hedef (uzak zeplin) haksız yere ölür. Ortalama hız bu eşiğin altındaysa açı
+        // kontrolünü ATLA (ivme kontrolü hep çalışır; yerinde titreyen paralaks ivmeden yakalanır).
+        float  angle_min_speed = 1.5f; // px/kare
     };
 
     MultiTargetTracker();

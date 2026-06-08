@@ -161,9 +161,16 @@ void MultiTargetTracker::update(const std::vector<Detection>& dets,
             const float accel_sigma = sigma_of(accels);
             const float angle_sigma = sigma_of(angles);  // radyan
 
-            // Eşik: ivme VEYA yön fazla dağınıksa → clutter.
-            // angle_sigma > 0.8 rad ≈ ±46° sapma → tutarsız yön
-            if (accel_sigma > p_.max_accel_sigma || angle_sigma > p_.max_angle_sigma)
+            // Ortalama hız (px/kare): açı kontrolü yalnız yeterli hızda anlamlı.
+            float mean_speed = 0.f;
+            for (const auto& v : in.vel_hist) mean_speed += std::sqrt(v.x * v.x + v.y * v.y);
+            mean_speed /= static_cast<float>(in.vel_hist.size());
+
+            // Eşik: ivme VEYA (yeterli hızda) yön fazla dağınıksa → clutter.
+            // (#12) Yavaş hedefte (mean_speed < angle_min_speed) açı atlanır: yön anlamsız.
+            const bool angle_bad = mean_speed >= p_.angle_min_speed &&
+                                   angle_sigma > p_.max_angle_sigma;
+            if (accel_sigma > p_.max_accel_sigma || angle_bad)
                 in.t.misses = p_.max_misses + 1;  // bir sonraki adımda silinecek
         }
     }
