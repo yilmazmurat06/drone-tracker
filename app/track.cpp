@@ -11,7 +11,12 @@
 //
 //  Kullanım:
 //    dtrack_track [prefix] [--save out.mp4] [--dump N] [--max-frames N]
-//                 [--speed S] [--show-tentative] [--roi x,y,w,h]
+//                 [--speed S] [--show-tentative] [--roi x,y,w,h] [--lock FRAC]
+//
+//  --lock FRAC : manuel kilit modu. Karenin en-boy oranıyla orantılı, ortalı bir
+//    nişangah kutusu (genişlik/yükseklik × FRAC). Arama yalnız bu kutuda yapılır →
+//    pilot hedefi merkeze alıp kilitler (otomatik cue + rescan kapanır). HUD nişangahı
+//    çizilir; içeride confirmed iz varsa "LOCK", yoksa "SEARCH".
 // ============================================================================
 #include <algorithm>
 #include <cmath>
@@ -41,13 +46,25 @@ struct Args {
     bool show_tentative = false;
     cv::Rect roi;
     float score_thresh  = 0.70f;  // P3: bu eşiğin altındaki adaylar tracker'a gitmez
+    float large_admit   = 3000.f; // (#12) bbox alanı (px²) bundan büyük bloblar skordan muaf (zeplin gibi)
+    // Manuel kilit (boresight) ROI: karenin EN-BOY ORANIYLA orantılı, ortalı arama kutusu.
+    // Pilot hedefi merkeze alır → sistem yalnız bu kutudakine kilitlenir (manuel cue).
+    // 0=kapalı. Örn. 0.4 → genişliğin ve yüksekliğin %40'ı (oran korunur).
+    float lock_frac     = 0.f;
     // Tracker parametreleri (CLI'dan ayarlanabilir; varsayılanlar MultiTargetTracker::Params ile eşleşmeli)
     double gate_dist    = 25.0;
     int    confirm_hits = 5;
     double min_travel   = 25.0;
     // Kapalı-döngü cue
     bool   closed_loop  = true;   // confirmed izlerden ROI geri besle (--no-cue ile kapat)
-    int    cue_margin   = 200;    // ROI padding (px): hedefin etrafındaki arama alanı
+    int    cue_margin   = 200;    // ROI padding (px): confirmed hedefin etrafındaki arama alanı
+    int    rescan_every = 5;      // (#11) her N karede bir ROI'yi aç → tam-kare yeniden tara.
+                                  // Cue confirmed (çoğu kez zemin) ize kilitlenip ROI'yi daraltır;
+                                  // periyodik tam-kare tarama gökteki gerçek hedefi (zeplin) bulur,
+                                  // #12 fix'leri sayesinde coasting'le tutunup confirmed olur.
+                                  // ÖNEMLİ: rescan_every ≤ max_misses(5) olmalı; aksi halde iz iki
+                                  // rescan arasında coasting'de ölür, hits biriktiremez (8 çalışmaz).
+                                  // 0=kapalı. Küçük=daha çevik ama daha çok paralaks FP.
 };
 
 Args parse_args(int argc, char** argv) {
@@ -65,11 +82,14 @@ Args parse_args(int argc, char** argv) {
                 a.roi = cv::Rect(x, y, w, h);
         }
         else if (s == "--score-thresh"  && i + 1 < argc) a.score_thresh  = std::stof(argv[++i]);
+        else if (s == "--large-admit"   && i + 1 < argc) a.large_admit   = std::stof(argv[++i]);
+        else if (s == "--lock"          && i + 1 < argc) a.lock_frac     = std::stof(argv[++i]);
         else if (s == "--gate-dist"     && i + 1 < argc) a.gate_dist     = std::stod(argv[++i]);
         else if (s == "--confirm-hits"  && i + 1 < argc) a.confirm_hits  = std::stoi(argv[++i]);
         else if (s == "--min-travel"    && i + 1 < argc) a.min_travel    = std::stod(argv[++i]);
         else if (s == "--no-cue")                        a.closed_loop   = false;
         else if (s == "--cue-margin"    && i + 1 < argc) a.cue_margin    = std::stoi(argv[++i]);
+        else if (s == "--rescan-every"  && i + 1 < argc) a.rescan_every  = std::stoi(argv[++i]);
         else if (!s.empty() && s[0] != '-' && !pset) { a.prefix = s; pset = true; }
     }
     return a;
@@ -119,13 +139,36 @@ int main(int argc, char** argv) {
         cv::Matx33f H;
         stab.stabilize(frame, window, warped, H);
 
+        // Manuel kilit (boresight) ROI: karenin en-boy oranıyla orantılı, ortalı kutu.
+        // Aramayı bu kutuya sabitler → pilot hedefi merkeze alıp kilitler (otomatik cue
+        // ve rescan devre dışı; aşağıdaki cue bloğu lock_frac>0 iken atlanır).
+        cv::Rect lock_roi;
+        if (args.lock_frac > 0.f) {
+            const cv::Size fsz = warped.image.size();
+            const int lw = cvRound(fsz.width  * args.lock_frac);
+            const int lh = cvRound(fsz.height * args.lock_frac);
+            lock_roi = cv::Rect((fsz.width - lw) / 2, (fsz.height - lh) / 2, lw, lh);
+            det.set_roi(lock_roi);
+        }
+
         std::vector<dtrack::Detection> dets;
         det.detect(warped, dets);
 
         // P3: her adaya skor ver, eşiğin altını ele (clutter reddi).
+        // (#12) İSTİSNA: alanı large_admit'ten BÜYÜK bloblar şekil-skorundan MUAF tutulur.
+        // NEDEN: P3 küçük kompakt drone'a göre ayarlı; büyük+uzun zeplin düşük skor alır
+        // (compactness tavanı). Ring-gate (#13) zemini zaten eledi → büyük in-sky blob
+        // nadir ve büyük olasılıkla gerçek hedef. Kararı tracker'ın zamansal tutarlılığına
+        // (M-of-N + vel-consistency) bırak; clutter ise titreyeceği için orada elenir.
         for (auto& d : dets) d.score = disc.score(d);
+        // NOT: ölçüt d.area DEĞİL d.bbox alanı: top-hat yalnız koyu gondol/afiş
+        // piksellerini sayar (area küçük), ama silüet kutusu (expand_to_silhouette)
+        // tüm zeplini kaplar → büyük cismi bbox alanı yakalar.
         dets.erase(std::remove_if(dets.begin(), dets.end(),
-                       [&](const dtrack::Detection& d){ return d.score < args.score_thresh; }),
+                       [&](const dtrack::Detection& d){
+                           return d.score < args.score_thresh &&
+                                  d.bbox.area() < args.large_admit;
+                       }),
                    dets.end());
 
         std::vector<dtrack::Track> tracks;
@@ -134,7 +177,7 @@ int main(int argc, char** argv) {
         // Kapalı-döngü cue: confirmed izlerin bir-kare-sonraki tahmin konumlarından
         // ROI oluştur, detektöre geri besle. Confirmed iz yoksa → tam kare (fallback).
         // NEDEN: ROI daraldıkça paralaks yanlış-pozitiflerin büyük çoğunluğu dışarıda kalır.
-        if (args.closed_loop && args.roi.empty()) {
+        if (args.closed_loop && args.roi.empty() && args.lock_frac <= 0.f) {
             cv::Rect cue;
             const cv::Size fsz = warped.image.size();
             const cv::Rect frame_rect(0, 0, fsz.width, fsz.height);
@@ -150,6 +193,16 @@ int main(int argc, char** argv) {
             }
             if (cue.area() > 0) { det.set_roi(cue); last_cue = cue; }
             else                 { det.clear_roi(); last_cue = cv::Rect(); }
+
+            // (#11) Periyodik tam-kare yeniden tarama (OPSİYONEL, --rescan-every ile aç):
+            // cue paralaks gibi YANLIŞ bir hedefe kilitlenip ROI'yi oraya daraltmış olabilir
+            // → gökteki gerçek hedef hiç aranmaz. Her rescan_every karede bir ROI'yi aç.
+            // NOT: Tek başına confirmed kazandırmaz (bkz. #12 tespit tutarsızlığı); rescan'da
+            // görülen hedef diğer karelerde yine ROI dışında kaldığı için M-of-N dolmaz.
+            // Bu yüzden varsayılan KAPALI; #12 çözülünce anlamlı olacak.
+            if (args.rescan_every > 0 && (shown % args.rescan_every == 0)) {
+                det.clear_roi(); last_cue = cv::Rect();
+            }
         }
 
         prev_t = t; have_prev = true;
@@ -167,8 +220,27 @@ int main(int argc, char** argv) {
         } else {
             cv::Mat vis = warped.image.clone();
             // Aktif cue ROI: soluk mavi dikdörtgen
-            if (args.closed_loop && last_cue.area() > 0)
+            if (args.closed_loop && args.lock_frac <= 0.f && last_cue.area() > 0)
                 cv::rectangle(vis, last_cue, cv::Scalar(180, 80, 0), 1);
+
+            // Manuel kilit nişangahı (HUD): köşe braketleri + merkez artı.
+            // İçeride confirmed iz varsa "LOCK" (sarı), yoksa "SEARCH" (beyaz).
+            if (args.lock_frac > 0.f && lock_roi.area() > 0) {
+                const bool locked = n_conf > 0;
+                const cv::Scalar col = locked ? cv::Scalar(0, 255, 0) : cv::Scalar(230, 230, 230);
+                const int L = std::max(14, lock_roi.width / 10);  // köşe çentik uzunluğu
+                const cv::Point tl = lock_roi.tl(), br = lock_roi.br();
+                const cv::Point tr(br.x, tl.y), bl(tl.x, br.y);
+                cv::line(vis, tl, tl + cv::Point(L, 0), col, 2); cv::line(vis, tl, tl + cv::Point(0, L), col, 2);
+                cv::line(vis, tr, tr + cv::Point(-L, 0), col, 2); cv::line(vis, tr, tr + cv::Point(0, L), col, 2);
+                cv::line(vis, bl, bl + cv::Point(L, 0), col, 2); cv::line(vis, bl, bl + cv::Point(0, -L), col, 2);
+                cv::line(vis, br, br + cv::Point(-L, 0), col, 2); cv::line(vis, br, br + cv::Point(0, -L), col, 2);
+                const cv::Point ctr((tl.x + br.x) / 2, (tl.y + br.y) / 2);
+                cv::line(vis, ctr - cv::Point(12, 0), ctr + cv::Point(12, 0), col, 1);
+                cv::line(vis, ctr - cv::Point(0, 12), ctr + cv::Point(0, 12), col, 1);
+                cv::putText(vis, locked ? "LOCK" : "SEARCH", {tl.x, tl.y - 10},
+                            cv::FONT_HERSHEY_SIMPLEX, 0.7, col, 2, cv::LINE_AA);
+            }
             for (const auto& tr : tracks) {
                 const bool conf = tr.status == dtrack::Track::Status::Confirmed;
                 if (!conf && !args.show_tentative) continue;
