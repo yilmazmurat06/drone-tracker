@@ -45,6 +45,9 @@ struct Args {
     double gate_dist    = 25.0;
     int    confirm_hits = 5;
     double min_travel   = 25.0;
+    // Kapalı-döngü cue
+    bool   closed_loop  = true;   // confirmed izlerden ROI geri besle (--no-cue ile kapat)
+    int    cue_margin   = 200;    // ROI padding (px): hedefin etrafındaki arama alanı
 };
 
 Args parse_args(int argc, char** argv) {
@@ -65,6 +68,8 @@ Args parse_args(int argc, char** argv) {
         else if (s == "--gate-dist"     && i + 1 < argc) a.gate_dist     = std::stod(argv[++i]);
         else if (s == "--confirm-hits"  && i + 1 < argc) a.confirm_hits  = std::stoi(argv[++i]);
         else if (s == "--min-travel"    && i + 1 < argc) a.min_travel    = std::stod(argv[++i]);
+        else if (s == "--no-cue")                        a.closed_loop   = false;
+        else if (s == "--cue-margin"    && i + 1 < argc) a.cue_margin    = std::stoi(argv[++i]);
         else if (!s.empty() && s[0] != '-' && !pset) { a.prefix = s; pset = true; }
     }
     return a;
@@ -103,6 +108,7 @@ int main(int argc, char** argv) {
 
     double prev_t = 0; bool have_prev = false;
     int shown = 0;
+    cv::Rect last_cue;  // görselleştirme için son aktif ROI
 
     dtrack::Frame frame, warped;
     while (video.next(frame)) {
@@ -125,6 +131,27 @@ int main(int argc, char** argv) {
         std::vector<dtrack::Track> tracks;
         trk.update(dets, tracks);
 
+        // Kapalı-döngü cue: confirmed izlerin bir-kare-sonraki tahmin konumlarından
+        // ROI oluştur, detektöre geri besle. Confirmed iz yoksa → tam kare (fallback).
+        // NEDEN: ROI daraldıkça paralaks yanlış-pozitiflerin büyük çoğunluğu dışarıda kalır.
+        if (args.closed_loop && args.roi.empty()) {
+            cv::Rect cue;
+            const cv::Size fsz = warped.image.size();
+            const cv::Rect frame_rect(0, 0, fsz.width, fsz.height);
+            const int m = args.cue_margin;
+            for (const auto& tr : tracks) {
+                if (tr.status != dtrack::Track::Status::Confirmed) continue;
+                // Bir kare ilerisi tahmini: pos + vel (Kalman'ın ilerlemesi)
+                const cv::Point2f next = tr.pos + tr.vel;
+                cv::Rect r(cvRound(next.x) - m, cvRound(next.y) - m, 2 * m, 2 * m);
+                r &= frame_rect;                   // kare sınırına kırp
+                if (r.area() > 0)
+                    cue = cue.area() == 0 ? r : (cue | r);
+            }
+            if (cue.area() > 0) { det.set_roi(cue); last_cue = cue; }
+            else                 { det.clear_roi(); last_cue = cv::Rect(); }
+        }
+
         prev_t = t; have_prev = true;
         ++shown;
 
@@ -139,6 +166,9 @@ int main(int argc, char** argv) {
                         (long long)frame.id, dets.size(), n_tent, n_conf);
         } else {
             cv::Mat vis = warped.image.clone();
+            // Aktif cue ROI: soluk mavi dikdörtgen
+            if (args.closed_loop && last_cue.area() > 0)
+                cv::rectangle(vis, last_cue, cv::Scalar(180, 80, 0), 1);
             for (const auto& tr : tracks) {
                 const bool conf = tr.status == dtrack::Track::Status::Confirmed;
                 if (!conf && !args.show_tentative) continue;

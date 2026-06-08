@@ -15,3 +15,4 @@ data/*.avi
 .vscode/
 .idea/
 *.swp
+demo_output.mp4
