@@ -1,0 +1,17 @@
+# --- Build çıktıları ---
+build/
+cmake-build-*/
+out/
+
+# --- Büyük medya: ham uçuş videoları git'e GİRMEZ (her biri ~yüzlerce MB) ---
+# Telemetri .csv'leri küçük olduğu için commit edilebilir.
+data/*.mp4
+data/*.mov
+data/*.mkv
+data/*.avi
+
+# --- OS / editör ---
+.DS_Store
+.vscode/
+.idea/
+*.swp
