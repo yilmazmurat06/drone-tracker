@@ -50,12 +50,22 @@ struct Args {
     // Manuel kilit (boresight) ROI: karenin EN-BOY ORANIYLA orantılı, ortalı arama kutusu.
     // Pilot hedefi merkeze alır → sistem yalnız bu kutudakine kilitlenir (manuel cue).
     // 0=kapalı. Örn. 0.4 → genişliğin ve yüksekliğin %40'ı (oran korunur).
-    float lock_frac     = 0.f;
+    // VARSAYILAN AÇIK (0.5): nişangah/lock çerçevesi kalıcı (kullanıcı isteği).
+    // Kapatmak için --lock 0.
+    float lock_frac     = 0.5f;
     // Lock modunda P3 şekil-eşiği: kutu göğe nişanlandığı için YÜKSEK RECALL → tüm
     // sky-gate'li adayları (her boy/şekilde hava aracı) kabul et. 0=hepsini al.
     float lock_score    = 0.f;
     // (#14) Lock'ta doku kapısı: halkanın asgari pürüzsüz oranı. <0 → detektör varsayılanı (0.65).
     float lock_smooth   = -1.f;
+    // (#14) Ufuk doğrulama: --draw-horizon ile telemetri ufkunu çiz; --hconv N konvansiyon.
+    bool  draw_horizon  = false;
+    int   hconv         = 0;
+    // (#14) Ufuk KAPISI: ufuk altı (zemin) adayları ele. VARSAYILAN KAPALI (opt-in
+    // --horizon-gate): kalibre ufuk şu an ~60px hatalı ve kararsız → gate güvenilmez.
+    // Düzgün çalışması FOV/distorsiyon/offset kalibrasyonu ister (gelecek iş). 0/1.
+    int   horizon_gate  = 0;
+    int   horizon_margin = 90;
     // Tracker parametreleri (CLI'dan ayarlanabilir; varsayılanlar MultiTargetTracker::Params ile eşleşmeli)
     double gate_dist    = 25.0;
     int    confirm_hits = 5;
@@ -91,6 +101,11 @@ Args parse_args(int argc, char** argv) {
         else if (s == "--lock"          && i + 1 < argc) a.lock_frac     = std::stof(argv[++i]);
         else if (s == "--lock-score"    && i + 1 < argc) a.lock_score    = std::stof(argv[++i]);
         else if (s == "--lock-smooth"   && i + 1 < argc) a.lock_smooth   = std::stof(argv[++i]);
+        else if (s == "--draw-horizon")                  a.draw_horizon  = true;
+        else if (s == "--hconv"         && i + 1 < argc) a.hconv         = std::stoi(argv[++i]);
+        else if (s == "--horizon-gate")                  a.horizon_gate  = 1;
+        else if (s == "--no-horizon")                    a.horizon_gate  = 0;
+        else if (s == "--horizon-margin" && i + 1 < argc) a.horizon_margin = std::stoi(argv[++i]);
         else if (s == "--gate-dist"     && i + 1 < argc) a.gate_dist     = std::stod(argv[++i]);
         else if (s == "--confirm-hits"  && i + 1 < argc) a.confirm_hits  = std::stoi(argv[++i]);
         else if (s == "--min-travel"    && i + 1 < argc) a.min_travel    = std::stod(argv[++i]);
@@ -100,6 +115,34 @@ Args parse_args(int argc, char** argv) {
         else if (!s.empty() && s[0] != '-' && !pset) { a.prefix = s; pset = true; }
     }
     return a;
+}
+
+// attitude quaternion'dan KAMERA çerçevesinde yerçekimi yönü (gx,gy,gz).
+// hconv: konvansiyon seçimi (doğrulama). 0..5 → world_down = ±e_axis (R^T·e = R'nin satırı).
+cv::Vec3d gravity_cam(const dtrack::Telemetry& t, int hconv) {
+    const double x = t.att_x, y = t.att_y, z = t.att_z, w = t.att_w;
+    const double R[3][3] = {
+        {1 - 2 * (y * y + z * z), 2 * (x * y - z * w),     2 * (x * z + y * w)},
+        {2 * (x * y + z * w),     1 - 2 * (x * x + z * z), 2 * (y * z - x * w)},
+        {2 * (x * z - y * w),     2 * (y * z + x * w),     1 - 2 * (x * x + y * y)}};
+    // KALİBRE konvansiyon (dtrack_horizon_calib): axis=1(Y), perm={2,1,0}, sign={+,+,−}.
+    // world_down BODY = −R[1] satırı; g_cam = işaretli-permütasyon.
+    const cv::Vec3d v(-R[1][0], -R[1][1], -R[1][2]);
+    (void)hconv;
+    return {+v[2], +v[1], -v[0]};
+}
+
+// Ufuk çizgisini çiz (DOĞRULAMA — henüz kapı değil). g·(u−cx, v−cy, f)=0.
+void draw_horizon(cv::Mat& vis, const cv::Vec3d& g, float fov_deg, int hconv) {
+    const int W = vis.cols, H = vis.rows;
+    const double cx = W * 0.5, cy = H * 0.5;
+    const double f = (W * 0.5) / std::tan(0.5 * fov_deg * CV_PI / 180.0);
+    if (std::fabs(g[1]) < 1e-6) return;        // dikey çizgi → atla
+    auto v_at = [&](double u) { return cy - (g[0] * (u - cx) + g[2] * f) / g[1]; };
+    const cv::Point p0(0, cvRound(v_at(0))), p1(W - 1, cvRound(v_at(W - 1)));
+    cv::line(vis, p0, p1, cv::Scalar(0, 0, 255), 2, cv::LINE_AA);   // kırmızı ufuk
+    cv::putText(vis, "HORIZON hconv=" + std::to_string(hconv), {20, H - 20},
+                cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 0, 255), 2, cv::LINE_AA);
 }
 
 }  // namespace
@@ -168,6 +211,24 @@ int main(int argc, char** argv) {
 
         std::vector<dtrack::Detection> dets;
         det.detect(warped, dets);
+
+        // (#14) Ufuk kapısı: telemetri ufkunun ALTINDAKİ (zemin) adayları ele.
+        // Pürüzsüz uzak zemin/haze'i de keser (renk/doku elemiyordu — geometrik ayraç).
+        // Lock'ta otomatik açık. Kalibre ufuk ~60px hatalı → marj (horizon_margin) ver.
+        const bool use_hgate = (args.horizon_gate == 1);   // opt-in (#14 kalibrasyon WIP)
+        if (use_hgate && have_telem) {
+            const cv::Vec3d g = gravity_cam(telem.at(t), 0);
+            const cv::Size fsz = warped.image.size();
+            const double cx = fsz.width * 0.5, cy = fsz.height * 0.5;
+            const double f = (fsz.width * 0.5) / std::tan(0.5 * 128.0 * CV_PI / 180.0);
+            if (std::fabs(g[1]) > 1e-6) {
+                dets.erase(std::remove_if(dets.begin(), dets.end(),
+                    [&](const dtrack::Detection& d) {
+                        const double vh = cy - (g[0] * (d.centroid.x - cx) + g[2] * f) / g[1];
+                        return d.centroid.y > vh + args.horizon_margin;  // ufuk altı = zemin
+                    }), dets.end());
+            }
+        }
 
         // P3: her adaya skor ver, eşiğin altını ele (clutter reddi).
         // (#12) İSTİSNA: alanı large_admit'ten BÜYÜK bloblar şekil-skorundan MUAF tutulur.
@@ -239,6 +300,9 @@ int main(int argc, char** argv) {
                         (long long)frame.id, dets.size(), n_tent, n_conf);
         } else {
             cv::Mat vis = warped.image.clone();
+            // (#14) Ufuk doğrulama çizimi (telemetri attitude → ufuk çizgisi).
+            if (args.draw_horizon && have_telem)
+                draw_horizon(vis, gravity_cam(telem.at(t), args.hconv), 128.f, args.hconv);
             // Aktif cue ROI: soluk mavi dikdörtgen
             if (args.closed_loop && args.lock_frac <= 0.f && last_cue.area() > 0)
                 cv::rectangle(vis, last_cue, cv::Scalar(180, 80, 0), 1);

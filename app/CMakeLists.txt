@@ -30,6 +30,13 @@ target_link_libraries(dtrack_calibrate PRIVATE
   dtrack_stabilization
   Threads::Threads)
 
+# Ufuk konvansiyon kalibrasyonu (#14): görüntü ufkuna karşı 144 konvansiyon arar.
+add_executable(dtrack_horizon_calib horizon_calib.cpp)
+target_link_libraries(dtrack_horizon_calib PRIVATE
+  dtrack_core
+  dtrack_io
+  Threads::Threads)
+
 # Tespit demo (Adım 4): stabilize + hibrit (kare-farkı+MOG2) tespit + kutu çizimi.
 add_executable(dtrack_detect detect.cpp)
 target_link_libraries(dtrack_detect PRIVATE
