@@ -60,6 +60,17 @@ public:
         // sky_overlap_min: halka için asgari gök oranı (0=kapalı). sky_ring: halka payı (px).
         double sky_overlap_min = 0.6;
         int    sky_ring        = 6;
+        // Doku kapısı (#14): adayın ÇEVRE HALKASI dokuluysa (zemin: ağaç/çim, yüksek
+        // gradyan) ele; gök/haze pürüzsüz (düşük gradyan) → geçer. Renk tabanlı ring
+        // sky-gate'in haze sızıntısını kapatır (haze pürüzsüz ama "gök renkli" sanılıyordu;
+        // doku haze ile zemini net ayırır). Lock zone precision için (track.cpp lock'ta açar).
+        bool   texture_gate      = false;
+        int    texture_thresh    = 28;    // gradyan eşiği: üstü = piksel-kenar
+        int    texture_win       = 15;    // yerel kenar-yoğunluğu pencere (px)
+        int    texture_density_max = 40;  // yoğunluk eşiği [0-255]: altı = pürüzsüz (gök/haze)
+        int    texture_offset    = 16;    // halka, blob kenarından bu kadar ÖTEDE başlar
+                                          // (cismin kendi kenarları arka-plan dokusuna karışmasın)
+        double texture_smooth_min = 0.65; // halkanın asgari pürüzsüz oranı (altı = zemin → ele)
         // --- yerel kontrast (top-hat) dalı: SOLUK/KÜÇÜK hedefi MEKÂNSAL yakalar ---
         // absdiff, parlak cismi parlak bulut önünde göremez (zaman-farkı Δ küçük).
         // Top-hat: çevresinden PARLAK (white-hat) VEYA KOYU (black-hat) kompakt

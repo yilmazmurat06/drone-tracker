@@ -173,6 +173,25 @@ bool MovingTargetDetector::detect(const Frame& in, std::vector<Detection>& out) 
         }
     }
 
+    // --- Doku haritası (#14): |gradyan| büyüklüğü → "pürüzsüz" (gök/haze) maskesi.
+    //   Zemin (ağaç/çim) yüksek gradyan; gök/haze düşük. Aday halkası dokuluysa zemin.
+    cv::Mat smooth;  // 0/255: pürüzsüz pikseller (yerel kenar-yoğunluğu düşük = gök/haze)
+    if (p_.texture_gate) {
+        cv::Mat gx, gy;
+        cv::Sobel(gray, gx, CV_16S, 1, 0);
+        cv::Sobel(gray, gy, CV_16S, 0, 1);
+        cv::convertScaleAbs(gx, gx);
+        cv::convertScaleAbs(gy, gy);
+        cv::Mat mag;
+        cv::addWeighted(gx, 0.5, gy, 0.5, 0.0, mag);   // ~|gradyan|
+        cv::Mat edges = mag > p_.texture_thresh;       // 0/255 piksel-kenar
+        // Yerel kenar YOĞUNLUĞU: ağaç/çim bölgesi yoğun kenar → yüksek; tek uçağın
+        // kendi kenarı SEYREK → düşük (uçak korunur). Pürüzsüz = düşük yoğunluk.
+        cv::Mat density;
+        cv::boxFilter(edges, density, CV_8U, {p_.texture_win, p_.texture_win});
+        smooth = density < p_.texture_density_max;
+    }
+
     // --- Top-hat dalı: SOLUK/KÜÇÜK hedefi MEKÂNSAL kontrastla yakala.
     //   absdiff/MOG2 parlak zeplini parlak bulut önünde kaçırır (Δ küçük); ama
     //   cisim çevresinden ayrıktır. white-hat (çevreden parlak) ∪ black-hat
@@ -241,6 +260,22 @@ bool MovingTargetDetector::detect(const Frame& in, std::vector<Detection>& out) 
             const double ring = std::max(1.0, eb.area() - area);          // halka alanı (blob hariç)
             const double ring_sky = cv::countNonZero(sky_raw(eb));        // halkadaki gök (blob koyu→~0 katkı)
             if (ring_sky / ring < p_.sky_overlap_min) continue;
+        }
+
+        // Doku kapısı (#14): çevre ARKA PLANI dokulu ise (zemin) ele. Renk gate'inin
+        // haze sızıntısını kapatır: haze pürüzsüz ama "gök renkli"; zemin dokulu.
+        // ÖNEMLİ: halka blob kenarından texture_offset kadar ÖTEDE başlar → cismin
+        // KENDİ kenarları yoğunluğa karışmaz (yoksa uçak da reddedilir). Ölçü =
+        // dış kutu (bbox+ofset+halka) ile iç kutu (bbox+ofset) arasındaki HALKA.
+        if (p_.texture_gate && !smooth.empty()) {
+            const cv::Rect frame(0, 0, smooth.cols, smooth.rows);
+            const int o = p_.texture_offset, R = p_.sky_ring;
+            cv::Rect gb(x + roi.x, y + roi.y, w, h);
+            cv::Rect inner = (cv::Rect(gb.x - o,     gb.y - o,     gb.width + 2 * o,       gb.height + 2 * o))       & frame;
+            cv::Rect outer = (cv::Rect(gb.x - o - R, gb.y - o - R, gb.width + 2 * (o + R), gb.height + 2 * (o + R))) & frame;
+            const double ring_area   = std::max(1, outer.area() - inner.area());
+            const double ring_smooth = cv::countNonZero(smooth(outer)) - cv::countNonZero(smooth(inner));
+            if (ring_smooth / ring_area < p_.texture_smooth_min) continue;
         }
 
         Detection d;

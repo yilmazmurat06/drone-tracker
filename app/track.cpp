@@ -54,6 +54,8 @@ struct Args {
     // Lock modunda P3 şekil-eşiği: kutu göğe nişanlandığı için YÜKSEK RECALL → tüm
     // sky-gate'li adayları (her boy/şekilde hava aracı) kabul et. 0=hepsini al.
     float lock_score    = 0.f;
+    // (#14) Lock'ta doku kapısı: halkanın asgari pürüzsüz oranı. <0 → detektör varsayılanı (0.65).
+    float lock_smooth   = -1.f;
     // Tracker parametreleri (CLI'dan ayarlanabilir; varsayılanlar MultiTargetTracker::Params ile eşleşmeli)
     double gate_dist    = 25.0;
     int    confirm_hits = 5;
@@ -88,7 +90,7 @@ Args parse_args(int argc, char** argv) {
         else if (s == "--large-admit"   && i + 1 < argc) a.large_admit   = std::stof(argv[++i]);
         else if (s == "--lock"          && i + 1 < argc) a.lock_frac     = std::stof(argv[++i]);
         else if (s == "--lock-score"    && i + 1 < argc) a.lock_score    = std::stof(argv[++i]);
-        else if (s == "--lock-score"    && i + 1 < argc) a.lock_score    = std::stof(argv[++i]);
+        else if (s == "--lock-smooth"   && i + 1 < argc) a.lock_smooth   = std::stof(argv[++i]);
         else if (s == "--gate-dist"     && i + 1 < argc) a.gate_dist     = std::stod(argv[++i]);
         else if (s == "--confirm-hits"  && i + 1 < argc) a.confirm_hits  = std::stoi(argv[++i]);
         else if (s == "--min-travel"    && i + 1 < argc) a.min_travel    = std::stod(argv[++i]);
@@ -111,7 +113,15 @@ int main(int argc, char** argv) {
     const bool have_telem = telem.load(args.prefix + ".telemetry.csv");
 
     dtrack::GyroFlowStabilizer stab;
-    dtrack::MovingTargetDetector det;
+    dtrack::MovingTargetDetector::Params det_p;
+    if (args.lock_frac > 0.f && args.lock_smooth >= 0.f) {
+        // (#14, OPT-IN) Doku kapısı: çevresi dokulu (zemin) adayları ele. Recall'ı
+        // feda edebilir (bulut önündeki büyük uçak da elenebilir) → varsayılan KAPALI;
+        // yalnız --lock-smooth verilince açılır. Asıl precision = telemetri ufku (#14).
+        det_p.texture_gate = true;
+        det_p.texture_smooth_min = args.lock_smooth;
+    }
+    dtrack::MovingTargetDetector det(det_p);
     dtrack::ClutterDiscriminator disc;
     dtrack::MultiTargetTracker::Params trk_p;
     trk_p.gate_dist    = args.gate_dist;
