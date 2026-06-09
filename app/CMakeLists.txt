@@ -54,4 +54,5 @@ target_link_libraries(dtrack_track PRIVATE
   dtrack_stabilization
   dtrack_detection
   dtrack_tracking
+  dtrack_guidance
   Threads::Threads)

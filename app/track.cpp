@@ -13,15 +13,21 @@
 //    dtrack_track [prefix] [--save out.mp4] [--dump N] [--max-frames N]
 //                 [--speed S] [--show-tentative] [--roi x,y,w,h] [--lock FRAC]
 //
-//  --lock FRAC : manuel kilit modu. Karenin en-boy oranıyla orantılı, ortalı bir
-//    nişangah kutusu (genişlik/yükseklik × FRAC). Arama yalnız bu kutuda yapılır →
-//    pilot hedefi merkeze alıp kilitler (otomatik cue + rescan kapanır). HUD nişangahı
-//    çizilir; içeride confirmed iz varsa "LOCK", yoksa "SEARCH".
+//  --lock FRAC : manuel kilit modu (VARSAYILAN AÇIK). Karenin en-boy oranıyla
+//    orantılı, ortalı bir nişangah kutusu. Arama yalnız bu kutuda yapılır.
+//
+//  GÜDÜM KATMANI (lock modunda): detector OTOMATİK KİLİTLEMEZ — yalnız PİLOTA
+//  numaralı ADAY sunar. Pilot bir drone'a kilitlenir → tek-hedef görsel tracker
+//  (Siamese sınıfı; şimdilik NCC stub) KESİNTİSİZ sürer. Takip güveni eşik altına
+//  düşerse sistem şüpheye düşüp detection'a dönerek hedefi YENİDEN DOĞRULAR.
+//    Klavye: '1'..'9' = adayı kilitle,  'u' = kilidi bırak,  'q'/ESC = çık.
+//    Fare    : tıklanan en yakın adaya kilitlen.
 // ============================================================================
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -31,6 +37,9 @@
 
 #include "dtrack/detection/clutter_discriminator.hpp"
 #include "dtrack/detection/moving_target_detector.hpp"
+#include "dtrack/guidance/guidance_controller.hpp"
+#include "dtrack/guidance/nano_siamese_tracker.hpp"
+#include "dtrack/guidance/ncc_template_tracker.hpp"
 #include "dtrack/io/recorded_frame_source.hpp"
 #include "dtrack/io/telemetry_log.hpp"
 #include "dtrack/stabilization/gyro_flow_stabilizer.hpp"
@@ -41,6 +50,7 @@ namespace {
 struct Args {
     std::string prefix = "data/flight_01_084727";
     std::string save_path;
+    bool dump = false;
     int dump_n = 0, max_frames = 0;
     double speed = 1.0;
     bool show_tentative = false;
@@ -73,6 +83,16 @@ struct Args {
     // Kapalı-döngü cue
     bool   closed_loop  = true;   // confirmed izlerden ROI geri besle (--no-cue ile kapat)
     int    cue_margin   = 200;    // ROI padding (px): confirmed hedefin etrafındaki arama alanı
+    // FAZ 1 spike: kilit-sonrası tek-hedef tracker seçimi.
+    //   varsayılan = NCC stub. --siamese → hazır NanoTrack (cv::TrackerNano) adaptörü.
+    bool   use_siamese  = false;
+    std::string nano_backbone = "models/nanotrack_backbone_sim.onnx";
+    std::string nano_head     = "models/nanotrack_head_sim.onnx";
+    // Headless A/B değerlendirmesi için "pilot" simülasyonu: bu kareden itibaren,
+    // SEARCH'te aday varsa nişangah MERKEZİNE en yakın adayı otomatik kilitle.
+    // -1 = kapalı (GUI'de manuel seçim). dump modunda spike ölçümü için kullanılır.
+    int    auto_lock_at = -1;
+    int    start_frame  = 0;   // video bu kareden başlat (seek)
     int    rescan_every = 5;      // (#11) her N karede bir ROI'yi aç → tam-kare yeniden tara.
                                   // Cue confirmed (çoğu kez zemin) ize kilitlenip ROI'yi daraltır;
                                   // periyodik tam-kare tarama gökteki gerçek hedefi (zeplin) bulur,
@@ -87,7 +107,14 @@ Args parse_args(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
         if (s == "--save" && i + 1 < argc) a.save_path = argv[++i];
-        else if (s == "--dump" && i + 1 < argc) a.dump_n = std::stoi(argv[++i]);
+        else if (s == "--dump") {
+            // --dump          → boolean (tüm kareler)
+            // --dump N        → eski compat: her N karede bir (≤0 ise tüm kareler)
+            a.dump = true;
+            if (i + 1 < argc && argv[i+1][0] != '-') {
+                a.dump_n = std::stoi(argv[++i]);
+            }
+        }
         else if (s == "--max-frames" && i + 1 < argc) a.max_frames = std::stoi(argv[++i]);
         else if (s == "--speed" && i + 1 < argc) a.speed = std::stod(argv[++i]);
         else if (s == "--show-tentative") a.show_tentative = true;
@@ -112,6 +139,11 @@ Args parse_args(int argc, char** argv) {
         else if (s == "--no-cue")                        a.closed_loop   = false;
         else if (s == "--cue-margin"    && i + 1 < argc) a.cue_margin    = std::stoi(argv[++i]);
         else if (s == "--rescan-every"  && i + 1 < argc) a.rescan_every  = std::stoi(argv[++i]);
+        else if (s == "--siamese")                       a.use_siamese   = true;
+        else if (s == "--nano-backbone" && i + 1 < argc) a.nano_backbone = argv[++i];
+        else if (s == "--nano-head"     && i + 1 < argc) a.nano_head     = argv[++i];
+        else if (s == "--auto-lock"     && i + 1 < argc) a.auto_lock_at  = std::stoi(argv[++i]);
+        else if (s == "--start"         && i + 1 < argc) a.start_frame   = std::stoi(argv[++i]);
         else if (!s.empty() && s[0] != '-' && !pset) { a.prefix = s; pset = true; }
     }
     return a;
@@ -145,6 +177,29 @@ void draw_horizon(cv::Mat& vis, const cv::Vec3d& g, float fov_deg, int hconv) {
                 cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 0, 255), 2, cv::LINE_AA);
 }
 
+// Fare seçim durumu: en son sunulan adaylar + güdüm denetleyicisi. Tıklamada
+// (sol tuş) tıklanan noktaya en yakın aday merkezi kilitlenir. setMouseCallback
+// userdata olarak geçer. scale = görüntü, ekrana >1920 ise 0.5 küçültülmüş olabilir.
+struct MouseState {
+    dtrack::GuidanceController* ctrl = nullptr;
+    std::vector<dtrack::Detection> cands;
+    double scale = 1.0;   // ekran→görüntü ölçek düzeltmesi (1/scale ile çarpılır)
+};
+
+void on_mouse(int event, int x, int y, int, void* userdata) {
+    if (event != cv::EVENT_LBUTTONDOWN) return;
+    auto* ms = static_cast<MouseState*>(userdata);
+    if (!ms || !ms->ctrl || ms->cands.empty()) return;
+    const float fx = static_cast<float>(x / ms->scale), fy = static_cast<float>(y / ms->scale);
+    int best = -1; float best_d2 = 1e18f;
+    for (int i = 0; i < static_cast<int>(ms->cands.size()); ++i) {
+        const cv::Point2f c = ms->cands[i].centroid;
+        const float d2 = (c.x - fx) * (c.x - fx) + (c.y - fy) * (c.y - fy);
+        if (d2 < best_d2) { best_d2 = d2; best = i; }
+    }
+    if (best >= 0) ms->ctrl->select(best);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -152,6 +207,7 @@ int main(int argc, char** argv) {
 
     dtrack::RecordedFrameSource video(args.prefix + ".mp4");
     if (!video.is_open()) { std::cerr << "HATA: video acilamadi\n"; return 1; }
+    if (args.start_frame > 0) video.seek(args.start_frame);
     dtrack::TelemetryLog telem;
     const bool have_telem = telem.load(args.prefix + ".telemetry.csv");
 
@@ -173,13 +229,41 @@ int main(int argc, char** argv) {
     dtrack::MultiTargetTracker trk(trk_p);
     if (!args.roi.empty()) det.set_roi(args.roi);
 
+    // --- Güdüm katmanı (yalnız lock modunda aktif) ---
+    // Tek-hedef tracker NPU-hedefli arayüz; şimdilik NCC CPU stub. Doğrulayıcı =
+    // mevcut P3 ClutterDiscriminator (re-acquire'da drone-luk skoru). Pilot kilidi
+    // klavye/fare ile verir; otomatik kilit YOK.
+    const bool guided = args.lock_frac > 0.f;
+    // Tracker seçimi (FAZ 1 spike): --siamese → hazır NanoTrack; yoksa NCC stub.
+    // Polimorfik: GuidanceController yalnız ISingleTargetTracker& görür (değişmez).
+    std::unique_ptr<dtrack::ISingleTargetTracker> st_tracker;
+    if (args.use_siamese) {
+        try {
+            st_tracker = std::make_unique<dtrack::NanoSiameseTracker>(
+                dtrack::NanoSiameseTracker::Params{args.nano_backbone, args.nano_head});
+            std::cout << "tracker: NanoTrack (Siamese) — " << args.nano_backbone << "\n";
+        } catch (const std::exception& e) {
+            std::cerr << "UYARI: NanoTrack kurulamadi (" << e.what()
+                      << ") → NCC stub'a donuluyor\n";
+        }
+    }
+    if (!st_tracker) {
+        st_tracker = std::make_unique<dtrack::NccTemplateTracker>();
+        if (!args.use_siamese) std::cout << "tracker: NCC template (stub)\n";
+    }
+    dtrack::GuidanceController guide(*st_tracker, disc);
+    MouseState mouse; mouse.ctrl = &guide;
+
     const double fps = video.fps();
-    const bool dumping = args.dump_n > 0;
+    const bool dumping = args.dump || args.dump_n > 0;
     const bool saving = !args.save_path.empty();
     const bool live = !dumping && !saving;
 
     if (dumping) std::printf("%6s %8s %10s %10s\n", "kare", "aday", "tentative", "confirmed");
-    if (live) cv::namedWindow("dtrack track", cv::WINDOW_NORMAL);
+    if (live) {
+        cv::namedWindow("dtrack track", cv::WINDOW_NORMAL);
+        if (guided) cv::setMouseCallback("dtrack track", on_mouse, &mouse);
+    }
 
     cv::VideoWriter writer;
     const int delay_ms = std::max(1, static_cast<int>(1000.0 / (fps * args.speed)));
@@ -253,7 +337,30 @@ int main(int argc, char** argv) {
                    dets.end());
 
         std::vector<dtrack::Track> tracks;
-        trk.update(dets, tracks);
+        dtrack::GuidanceController::Out gout;
+        if (guided) {
+            // GÜDÜM: detector adaylarını pilota sun / tek-hedef takibi sür. Çok-hedef
+            // tracker devre dışı (kilit-sonrası görsel takip tek hedefe odaklanır).
+            guide.on_frame(warped.image, dets, gout);
+            mouse.cands = gout.candidates;   // fare seçimi en son adaylara bakar
+            // "Pilot" simülasyonu (headless A/B): kareden itibaren SEARCH'te aday
+            // varsa nişangah merkezine en yakın adayı otomatik kilitle.
+            if (args.auto_lock_at >= 0 && (int)frame.id >= args.auto_lock_at &&
+                gout.state == dtrack::GuidanceController::State::Search &&
+                !gout.candidates.empty()) {
+                const cv::Size fsz = warped.image.size();
+                const cv::Point2f ctr(fsz.width * 0.5f, fsz.height * 0.5f);
+                int best = 0; float best_d2 = 1e18f;
+                for (int i = 0; i < (int)gout.candidates.size(); ++i) {
+                    const cv::Point2f c = gout.candidates[i].centroid;
+                    const float d2 = (c.x-ctr.x)*(c.x-ctr.x) + (c.y-ctr.y)*(c.y-ctr.y);
+                    if (d2 < best_d2) { best_d2 = d2; best = i; }
+                }
+                guide.select(best);
+            }
+        } else {
+            trk.update(dets, tracks);
+        }
 
         // Kapalı-döngü cue: confirmed izlerin bir-kare-sonraki tahmin konumlarından
         // ROI oluştur, detektöre geri besle. Confirmed iz yoksa → tam kare (fallback).
@@ -296,8 +403,19 @@ int main(int argc, char** argv) {
         }
 
         if (dumping) {
-            std::printf("%6lld %8zu %10d %10d\n",
-                        (long long)frame.id, dets.size(), n_tent, n_conf);
+            if (guided) {
+                // GÜDÜM dump: durum + güven + hedef kutusu (spike A/B ölçümü).
+                using GState = dtrack::GuidanceController::State;
+                const char* st = gout.state == GState::Track ? "TRACK"
+                               : gout.state == GState::Suspect ? "SUSPECT" : "SEARCH";
+                std::printf("%6lld  %-7s conf=%.3f  aday=%2zu  box=[%d,%d,%d,%d]\n",
+                            (long long)frame.id, st, gout.confidence,
+                            gout.candidates.size(), gout.target.x, gout.target.y,
+                            gout.target.width, gout.target.height);
+            } else {
+                std::printf("%6lld %8zu %10d %10d\n",
+                            (long long)frame.id, dets.size(), n_tent, n_conf);
+            }
         } else {
             cv::Mat vis = warped.image.clone();
             // (#14) Ufuk doğrulama çizimi (telemetri attitude → ufuk çizgisi).
@@ -308,10 +426,19 @@ int main(int argc, char** argv) {
                 cv::rectangle(vis, last_cue, cv::Scalar(180, 80, 0), 1);
 
             // Manuel kilit nişangahı (HUD): köşe braketleri + merkez artı.
-            // İçeride confirmed iz varsa "LOCK" (sarı), yoksa "SEARCH" (beyaz).
+            // Renk/etiket GÜDÜM durumundan gelir: SEARCH (beyaz), TRACK (yeşil),
+            // REACQUIRE (kırmızı, yanıp söner). Otomatik kilit YOK.
+            using GState = dtrack::GuidanceController::State;
             if (args.lock_frac > 0.f && lock_roi.area() > 0) {
-                const bool locked = n_conf > 0;
-                const cv::Scalar col = locked ? cv::Scalar(0, 255, 0) : cv::Scalar(230, 230, 230);
+                cv::Scalar col(230, 230, 230); std::string label = "SEARCH";
+                if (guided) {
+                    if (gout.state == GState::Track) { col = {0, 255, 0}; label = "TRACK"; }
+                    else if (gout.state == GState::Suspect) {
+                        // yanıp sönen kırmızı: "doğru şeyi mi takip ediyorum?"
+                        col = (shown % 2) ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 140, 255);
+                        label = "REACQUIRE";
+                    }
+                }
                 const int L = std::max(14, lock_roi.width / 10);  // köşe çentik uzunluğu
                 const cv::Point tl = lock_roi.tl(), br = lock_roi.br();
                 const cv::Point tr(br.x, tl.y), bl(tl.x, br.y);
@@ -322,36 +449,67 @@ int main(int argc, char** argv) {
                 const cv::Point ctr((tl.x + br.x) / 2, (tl.y + br.y) / 2);
                 cv::line(vis, ctr - cv::Point(12, 0), ctr + cv::Point(12, 0), col, 1);
                 cv::line(vis, ctr - cv::Point(0, 12), ctr + cv::Point(0, 12), col, 1);
-                cv::putText(vis, locked ? "LOCK" : "SEARCH", {tl.x, tl.y - 10},
+                cv::putText(vis, label, {tl.x, tl.y - 10},
                             cv::FONT_HERSHEY_SIMPLEX, 0.7, col, 2, cv::LINE_AA);
             }
-            for (const auto& tr : tracks) {
-                const bool conf = tr.status == dtrack::Track::Status::Confirmed;
-                if (!conf && !args.show_tentative) continue;
-                const cv::Point c(cvRound(tr.pos.x), cvRound(tr.pos.y));
-                if (conf) {
-                    // Ölçülen silüet kutusu (yoksa küçük varsayılan), 4px pay ile.
-                    cv::Rect b = tr.bbox.width > 0
-                        ? (tr.bbox + cv::Size(8, 8)) - cv::Point(4, 4)
-                        : cv::Rect(c.x - 14, c.y - 14, 28, 28);
-                    cv::rectangle(vis, b, cv::Scalar(0, 255, 0), 2);
-                    cv::putText(vis, "#" + std::to_string(tr.id), {b.x, b.y - 6},
-                                cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2);
-                    // hız oku (5x büyütülmüş)
-                    cv::arrowedLine(vis, c,
-                                    {c.x + cvRound(tr.vel.x * 5), c.y + cvRound(tr.vel.y * 5)},
-                                    cv::Scalar(0, 255, 255), 2, cv::LINE_AA, 0, 0.3);
-                } else {
-                    cv::circle(vis, c, 3, cv::Scalar(0, 200, 255), -1);  // tentative
+
+            if (guided) {
+                // SEARCH/SUSPECT: adayları NUMARALI çiz (pilot '1'..'9' / tık ile seçer).
+                if (gout.state != GState::Track) {
+                    for (int i = 0; i < static_cast<int>(gout.candidates.size()); ++i) {
+                        const cv::Rect b = gout.candidates[i].bbox;
+                        cv::rectangle(vis, b, cv::Scalar(0, 200, 255), 1);
+                        cv::putText(vis, std::to_string(i + 1), {b.x, b.y - 4},
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 200, 255), 2);
+                    }
                 }
+                // TRACK/SUSPECT: kilitli hedef kutusu + güven çubuğu.
+                if (gout.has_target && gout.target.area() > 0) {
+                    const cv::Scalar tc = (gout.state == GState::Track)
+                        ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 140, 255);
+                    cv::rectangle(vis, gout.target, tc, 2);
+                    const cv::Point bp(gout.target.x, gout.target.y - 8);
+                    const int bw = gout.target.width;
+                    cv::rectangle(vis, {bp.x, bp.y - 5, bw, 5}, cv::Scalar(60, 60, 60), -1);
+                    cv::rectangle(vis, {bp.x, bp.y - 5, cvRound(bw * gout.confidence), 5}, tc, -1);
+                }
+                const std::string st = gout.state == GState::Track ? "TRACK"
+                                     : gout.state == GState::Suspect ? "REACQUIRE" : "SEARCH";
+                cv::putText(vis, st + "  conf: " + cv::format("%.2f", gout.confidence) +
+                            "   (aday: " + std::to_string(gout.candidates.size()) + ")",
+                            {20, 40}, cv::FONT_HERSHEY_SIMPLEX, 0.9,
+                            cv::Scalar(0, 255, 0), 2, cv::LINE_AA);
+            } else {
+                for (const auto& tr : tracks) {
+                    const bool conf = tr.status == dtrack::Track::Status::Confirmed;
+                    if (!conf && !args.show_tentative) continue;
+                    const cv::Point c(cvRound(tr.pos.x), cvRound(tr.pos.y));
+                    if (conf) {
+                        // Ölçülen silüet kutusu (yoksa küçük varsayılan), 4px pay ile.
+                        cv::Rect b = tr.bbox.width > 0
+                            ? (tr.bbox + cv::Size(8, 8)) - cv::Point(4, 4)
+                            : cv::Rect(c.x - 14, c.y - 14, 28, 28);
+                        cv::rectangle(vis, b, cv::Scalar(0, 255, 0), 2);
+                        cv::putText(vis, "#" + std::to_string(tr.id), {b.x, b.y - 6},
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2);
+                        // hız oku (5x büyütülmüş)
+                        cv::arrowedLine(vis, c,
+                                        {c.x + cvRound(tr.vel.x * 5), c.y + cvRound(tr.vel.y * 5)},
+                                        cv::Scalar(0, 255, 255), 2, cv::LINE_AA, 0, 0.3);
+                    } else {
+                        cv::circle(vis, c, 3, cv::Scalar(0, 200, 255), -1);  // tentative
+                    }
+                }
+                cv::putText(vis, "confirmed: " + std::to_string(n_conf) +
+                            "   (aday: " + std::to_string(dets.size()) + ")",
+                            {20, 40}, cv::FONT_HERSHEY_SIMPLEX, 0.9,
+                            cv::Scalar(0, 255, 0), 2, cv::LINE_AA);
             }
-            cv::putText(vis, "confirmed: " + std::to_string(n_conf) +
-                        "   (aday: " + std::to_string(dets.size()) + ")",
-                        {20, 40}, cv::FONT_HERSHEY_SIMPLEX, 0.9,
-                        cv::Scalar(0, 255, 0), 2, cv::LINE_AA);
 
             cv::Mat outimg = vis;
-            if (outimg.cols > 1920) cv::resize(outimg, outimg, {}, 0.5, 0.5);
+            double disp_scale = 1.0;
+            if (outimg.cols > 1920) { cv::resize(outimg, outimg, {}, 0.5, 0.5); disp_scale = 0.5; }
+            mouse.scale = disp_scale;   // fare tıklamasını görüntü koordinatına çevir
             if (saving) {
                 if (!writer.isOpened())
                     writer.open(args.save_path, cv::VideoWriter::fourcc('m','p','4','v'),
@@ -361,11 +519,14 @@ int main(int argc, char** argv) {
                 cv::imshow("dtrack track", outimg);
                 const int k = cv::waitKey(delay_ms);
                 if (k == 'q' || k == 27) break;
+                // GÜDÜM klavyesi: '1'..'9' adayı kilitle, 'u' kilidi bırak.
+                else if (guided && k >= '1' && k <= '9') guide.select(k - '1');
+                else if (guided && k == 'u') guide.release();
             }
         }
 
         if (args.max_frames > 0 && shown >= args.max_frames) break;
-        if (args.dump_n > 0 && shown >= args.dump_n) break;
+        if (!args.dump && args.dump_n > 0 && shown >= args.dump_n) break;
     }
 
     if (saving) std::cout << "kaydedildi -> " << args.save_path << "\n";

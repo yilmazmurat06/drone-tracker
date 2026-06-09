@@ -16,3 +16,6 @@ data/*.avi
 .idea/
 *.swp
 demo_output.mp4
+
+# NN model dosyalari (indirilir, repoya girmez)
+models/

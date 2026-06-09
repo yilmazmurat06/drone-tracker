@@ -44,6 +44,7 @@ add_subdirectory(io)
 add_subdirectory(stabilization)
 add_subdirectory(detection)
 add_subdirectory(tracking)
+add_subdirectory(guidance)
 add_subdirectory(pipeline)
 add_subdirectory(app)
 

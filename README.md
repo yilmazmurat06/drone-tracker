@@ -7,7 +7,7 @@ Küçük (2–6 px) düşman İHA'larını klasik CV + Kalman filtresiyle bulup 
 
 > **Durum: Çalışan prototip.** P1–P4 tamamlandı. Tam zincir:
 > stabilize → tespit → P3 ayraç → Kalman takip → kapalı-döngü cue.
-> 30/30 birim test geçiyor.
+> 37/37 birim test geçiyor.
 
 ## Veri akışı
 
@@ -39,9 +39,10 @@ Kapalı-döngü cue          ← confirmed izlerden ROI → bir sonraki kareye g
 | `stabilization/` | P1: `GyroFlowStabilizer` — KLT+RANSAC → homoğrafi warp; gyro yedek |
 | `detection/` | P2: `MovingTargetDetector` + P3: `ClutterDiscriminator` |
 | `tracking/` | P4: `MultiTargetTracker` — Kalman + hız tutarlılık filtresi |
+| `guidance/` | Output/güdüm: `ISingleTargetTracker` (NPU-hedefli) + `NccTemplateTracker` (CPU stub) + `GuidanceController` (SEARCH/TRACK/SUSPECT durum makinesi) |
 | `pipeline/` | P6: aşama soyutlaması (çok-thread runner ertelendi) |
 | `app/` | CLI araçları (`dtrack_track`, `dtrack_detect`, `dtrack_stabilize`, `dtrack_replay`, `dtrack_calibrate`) |
-| `tests/` | 30 birim testi (GoogleTest) |
+| `tests/` | 37 birim testi (GoogleTest) |
 | `data/` | 3 Liftoff uçuşu — `flight_XX.mp4` + `flight_XX.telemetry.csv` (mp4 git'e girmez) |
 
 ## Derleme
@@ -53,7 +54,7 @@ Kapalı-döngü cue          ← confirmed izlerden ROI → bir sonraki kareye g
 
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-ctest --test-dir build --output-on-failure   # 30/30 test
+ctest --test-dir build --output-on-failure   # 37/37 test
 ```
 
 ## Kullanım
@@ -96,6 +97,30 @@ build/app/dtrack_track --help  # henüz yok; aşağıya bak
 | `--save dosya.mp4` | — | Çıktıyı video olarak kaydet |
 | `--dump N` | — | GUI yok; N kare sayısal çıktı |
 | `--max-frames N` | — | Durma noktası |
+
+### Output / güdüm katmanı (pilot iş akışı)
+
+`--lock` **varsayılan açıktır** (nişangah çerçevesi). Lock modunda artık **otomatik kilit
+yoktur**: detector yardımcıdır, lock çerçevesindeki tespitleri pilota **numaralı aday**
+olarak sunar. Çerçevede birden fazla drone varsa **pilot** birini seçer:
+
+```bash
+build/app/dtrack_track            # SEARCH: numaralı adaylar (otomatik kilit YOK)
+#   '1'..'9' → o adaya kilitlen (TRACK)   |   fare tık → en yakın adaya kilitlen
+#   'u'      → kilidi bırak (SEARCH)        |   'q'/ESC → çık
+build/app/dtrack_track --lock 0   # güdümü kapat → klasik çok-hedef takip
+```
+
+Kilit sonrası **kesintisiz tek-hedef takip** (`ISingleTargetTracker`, Siamese sınıfı —
+şimdilik `NccTemplateTracker` CPU stub) sürer. Takip güveni ("precision") eşik altına
+düşerse VEYA kesinti olursa durum **REACQUIRE**'a geçer: sistem hızla detection'a dönüp
+takip edilen bölgenin **gerçekten drone** olup olmadığını P3 ile yeniden doğrular;
+doğrulanırsa tracker yeniden tohumlanır (TRACK), aksi halde SEARCH'e döner.
+
+**Donanım hedefi (hibrit):** klasik detector+P3 **CPU**'da; tek-hedef tracker **NPU
+(int8, ~0.6 TOPS, ≤2.5MB)**. Bu bütçe çok-hedef NN'i dışlar → tek-hedef ayrımının nedeni.
+`ISingleTargetTracker` donanımdan bağımsızdır: gerçek int8 Siamese geldiğinde yalnız bu
+sınıf takas edilir, `GuidanceController` değişmez.
 
 ### Diğer araçlar
 

@@ -45,6 +45,12 @@ bool RecordedFrameSource::next(Frame& out) {
     return true;
 }
 
+void RecordedFrameSource::seek(int64_t frame_idx) {
+    if (!impl_->cap.isOpened() || frame_idx <= 0) return;
+    impl_->cap.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(frame_idx));
+    impl_->next_id = frame_idx;  // frame.id doğru kare numarasını göstersin
+}
+
 bool    RecordedFrameSource::is_open() const     { return impl_->cap.isOpened(); }
 double  RecordedFrameSource::fps() const         { return impl_->fps; }
 int64_t RecordedFrameSource::frame_count() const { return impl_->count; }

@@ -47,3 +47,9 @@ target_link_libraries(test_discriminator PRIVATE
   dtrack_detection
   GTest::gtest_main)
 gtest_discover_tests(test_discriminator)
+
+add_executable(test_guidance test_guidance.cpp)
+target_link_libraries(test_guidance PRIVATE
+  dtrack_guidance
+  GTest::gtest_main)
+gtest_discover_tests(test_guidance)

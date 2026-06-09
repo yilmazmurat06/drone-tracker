@@ -27,6 +27,7 @@ public:
     bool    is_open() const;      // video açılabildi mi?
     double  fps() const;          // kullanılan kare hızı (dosyadan veya parametreden)
     int64_t frame_count() const;  // toplam kare sayısı (biliniyorsa, yoksa 0)
+    void    seek(int64_t frame_idx); // verilen kareye atla (next_id de güncellenir)
 
 private:
     struct Impl;                      // tanımı .cpp'de
