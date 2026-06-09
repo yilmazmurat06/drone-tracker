@@ -93,6 +93,9 @@ struct Args {
     // -1 = kapalı (GUI'de manuel seçim). dump modunda spike ölçümü için kullanılır.
     int    auto_lock_at = -1;
     int    start_frame  = 0;   // video bu kareden başlat (seek)
+    // LOCK-INTEGRITY: kilit-sonrası geometrik bütünlük bekçisi (sky-ring+boyut+hareket).
+    // Varsayılan AÇIK. --no-integrity ile kapat (A/B ölçümü; yalnız-güven eski davranış).
+    int    use_integrity = 1;
     int    rescan_every = 5;      // (#11) her N karede bir ROI'yi aç → tam-kare yeniden tara.
                                   // Cue confirmed (çoğu kez zemin) ize kilitlenip ROI'yi daraltır;
                                   // periyodik tam-kare tarama gökteki gerçek hedefi (zeplin) bulur,
@@ -143,6 +146,7 @@ Args parse_args(int argc, char** argv) {
         else if (s == "--nano-backbone" && i + 1 < argc) a.nano_backbone = argv[++i];
         else if (s == "--nano-head"     && i + 1 < argc) a.nano_head     = argv[++i];
         else if (s == "--auto-lock"     && i + 1 < argc) a.auto_lock_at  = std::stoi(argv[++i]);
+        else if (s == "--no-integrity")                  a.use_integrity = 0;
         else if (s == "--start"         && i + 1 < argc) a.start_frame   = std::stoi(argv[++i]);
         else if (!s.empty() && s[0] != '-' && !pset) { a.prefix = s; pset = true; }
     }
@@ -251,7 +255,9 @@ int main(int argc, char** argv) {
         st_tracker = std::make_unique<dtrack::NccTemplateTracker>();
         if (!args.use_siamese) std::cout << "tracker: NCC template (stub)\n";
     }
-    dtrack::GuidanceController guide(*st_tracker, disc);
+    dtrack::GuidanceController::Params gp;
+    gp.use_integrity = (args.use_integrity != 0);
+    dtrack::GuidanceController guide(*st_tracker, disc, gp);
     MouseState mouse; mouse.ctrl = &guide;
 
     const double fps = video.fps();
@@ -271,6 +277,10 @@ int main(int argc, char** argv) {
     double prev_t = 0; bool have_prev = false;
     int shown = 0;
     cv::Rect last_cue;  // görselleştirme için son aktif ROI
+    // GÜDÜM dar-ROI: kilit sonrası (TRACK/SUSPECT) controller'ın ürettiği hedef-takipli
+    // pencere. Cue deseni gibi BİR KARE GECİKMELİ uygulanır (detect, on_frame'den önce
+    // koşar): bu kare hesaplanan ROI bir sonraki karenin detector'ına verilir.
+    cv::Rect guided_roi;
 
     dtrack::Frame frame, warped;
     while (video.next(frame)) {
@@ -290,7 +300,9 @@ int main(int argc, char** argv) {
             const int lw = cvRound(fsz.width  * args.lock_frac);
             const int lh = cvRound(fsz.height * args.lock_frac);
             lock_roi = cv::Rect((fsz.width - lw) / 2, (fsz.height - lh) / 2, lw, lh);
-            det.set_roi(lock_roi);
+            // Kilit aktifken (TRACK/SUSPECT) işlemi hedef-takipli DAR pencereye daralt;
+            // aksi halde (SEARCH) pilotun aday görmesi için merkezi nişangah kutusu.
+            det.set_roi(guided_roi.area() > 0 ? guided_roi : lock_roi);
         }
 
         std::vector<dtrack::Detection> dets;
@@ -358,6 +370,9 @@ int main(int argc, char** argv) {
                 }
                 guide.select(best);
             }
+            // Bir sonraki kare için dar-ROI: TRACK/SUSPECT'te hedef-takipli pencere,
+            // SEARCH'te boş (→ merkezi nişangaha geri dön).
+            guided_roi = gout.roi;
         } else {
             trk.update(dets, tracks);
         }
@@ -408,8 +423,9 @@ int main(int argc, char** argv) {
                 using GState = dtrack::GuidanceController::State;
                 const char* st = gout.state == GState::Track ? "TRACK"
                                : gout.state == GState::Suspect ? "SUSPECT" : "SEARCH";
-                std::printf("%6lld  %-7s conf=%.3f  aday=%2zu  box=[%d,%d,%d,%d]\n",
-                            (long long)frame.id, st, gout.confidence,
+                std::printf("%6lld  %-7s conf=%.3f  sky=%.2f%-7s aday=%2zu  box=[%d,%d,%d,%d]\n",
+                            (long long)frame.id, st, gout.confidence, gout.sky,
+                            (gout.integrity_reason[0] ? (std::string("(")+gout.integrity_reason+")").c_str() : ""),
                             gout.candidates.size(), gout.target.x, gout.target.y,
                             gout.target.width, gout.target.height);
             } else {
@@ -463,6 +479,10 @@ int main(int argc, char** argv) {
                                     cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 200, 255), 2);
                     }
                 }
+                // Dar işlem penceresi (ROI): kilit sonrası görüntü işlemenin yoğunlaştığı
+                // hedef-takipli bölge — soluk camgöbeği. STM32N6'da işlenen asıl alan budur.
+                if (gout.roi.area() > 0)
+                    cv::rectangle(vis, gout.roi, cv::Scalar(160, 160, 0), 1, cv::LINE_AA);
                 // TRACK/SUSPECT: kilitli hedef kutusu + güven çubuğu.
                 if (gout.has_target && gout.target.area() > 0) {
                     const cv::Scalar tc = (gout.state == GState::Track)
@@ -479,6 +499,15 @@ int main(int argc, char** argv) {
                             "   (aday: " + std::to_string(gout.candidates.size()) + ")",
                             {20, 40}, cv::FONT_HERSHEY_SIMPLEX, 0.9,
                             cv::Scalar(0, 255, 0), 2, cv::LINE_AA);
+                // Kilit-bütünlüğü satırı: gök-çevre oranı + (düştüyse) hangi eksen.
+                if (gp.use_integrity && gout.has_target) {
+                    const bool bad = gout.integrity_reason[0] != '\0';
+                    std::string ig = "integrity: sky=" + cv::format("%.2f", gout.sky);
+                    if (bad) ig += "  FAIL(" + std::string(gout.integrity_reason) + ")";
+                    cv::putText(vis, ig, {20, 70}, cv::FONT_HERSHEY_SIMPLEX, 0.7,
+                                bad ? cv::Scalar(0, 0, 255) : cv::Scalar(180, 220, 180),
+                                2, cv::LINE_AA);
+                }
             } else {
                 for (const auto& tr : tracks) {
                     const bool conf = tr.status == dtrack::Track::Status::Confirmed;

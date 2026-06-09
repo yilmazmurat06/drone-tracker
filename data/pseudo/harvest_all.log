@@ -1,0 +1,163 @@
+[INFO] harvest_all başladı: Tue Jun  9 16:17:15 +03 2026
+[INFO] log: data/pseudo/harvest_all.log
+
+########## flight_01 (exclude TEST 3084:3504) / collect ##########
+flight_01_084727: 60 trajectory, 69397 kare-kutu → data/pseudo/flight_01_raw.csv
+  uzunluk: min=34 ort=1156 max=3073
+[OK] flight_01 (exclude TEST 3084:3504) / collect (368s)
+
+########## flight_01 filter ##########
+ seq  len    dark   edge  karar
+   0 3073   0.020  0.094  bulut ✗
+   1  163  -0.009  0.315  bulut ✗
+   2 3063   0.009  0.094  bulut ✗
+   3 1133   0.003  0.251  bulut ✗
+   4 3053  -0.026  0.055  bulut ✗
+   5   69  -0.042  0.348  bulut ✗
+   6   62  -0.025  0.371  bulut ✗
+   7 3053   0.001  0.081  bulut ✗
+   8   57  -0.042  0.427  bulut ✗
+   9  949  -0.007  0.100  bulut ✗
+  10   40   0.000  0.384  bulut ✗
+  11 3053  -0.001  0.057  bulut ✗
+  12 1840   0.079  0.175  DRONE ✓
+  13 2972   0.105  0.142  DRONE ✓
+  14  460   0.098  0.111  bulut ✗
+  15 1418  -0.047  0.086  bulut ✗
+  17 2573   0.046  0.160  DRONE ✓
+  18 2513   0.024  0.137  DRONE ✓
+  19  571   0.048  0.235  DRONE ✓
+  20 1913   0.009  0.121  bulut ✗
+  21 1563  -0.051  0.068  bulut ✗
+  22 1523   0.007  0.139  bulut ✗
+  23 1153   0.010  0.121  bulut ✗
+  24  303  -0.006  0.129  bulut ✗
+  26  971  -0.080  0.046  bulut ✗
+  27 1000  -0.089  0.046  bulut ✗
+  28 1078   0.031  0.120  DRONE ✓
+  29  978  -0.078  0.048  bulut ✗
+  30  982  -0.047  0.045  bulut ✗
+  31  981  -0.102  0.041  bulut ✗
+  32  443  -0.091  0.048  bulut ✗
+  33 1021  -0.008  0.069  bulut ✗
+  34 1024  -0.031  0.066  bulut ✗
+  35  679  -0.002  0.024  bulut ✗
+  36 1084   0.030  0.145  DRONE ✓
+  37 1017   0.076  0.139  DRONE ✓
+  38  291  -0.033  0.130  bulut ✗
+  39 2074  -0.051  0.054  bulut ✗
+  40  277   0.036  0.175  DRONE ✓
+  41 1738   0.036  0.111  bulut ✗
+  42 1774   0.003  0.080  bulut ✗
+  43 1671   0.047  0.130  DRONE ✓
+  44  836   0.028  0.134  DRONE ✓
+  45 1218  -0.009  0.089  bulut ✗
+  46 1702   0.065  0.138  DRONE ✓
+  47 1691   0.032  0.128  DRONE ✓
+  48 1168   0.009  0.118  bulut ✗
+  49 1724   0.064  0.108  bulut ✗
+  50 1674  -0.005  0.081  bulut ✗
+  51   59   0.003  0.134  bulut ✗
+  52 1604  -0.012  0.082  bulut ✗
+  53  846  -0.089  0.064  bulut ✗
+  54  216   0.030  0.161  DRONE ✓
+  55  196   0.041  0.124  DRONE ✓
+  56  222  -0.073  0.044  bulut ✗
+  57  324  -0.029  0.051  bulut ✗
+  58  104   0.007  0.087  bulut ✗
+  59   52  -0.031  0.180  bulut ✗
+  60   74  -0.019  0.117  bulut ✗
+  61   34   0.001  0.001  bulut ✗
+
+Kabul: 15 drone trajectory (20237 kare-kutu) | Red: 45 bulut
+→ data/pseudo/flight_01_clean.csv
+[OK] flight_01 filter (206s)
+
+########## flight_02 / collect ##########
+flight_02_084915: 27 trajectory, 41182 kare-kutu → data/pseudo/flight_02_raw.csv
+  uzunluk: min=37 ort=1525 max=3419
+[OK] flight_02 / collect (196s)
+
+########## flight_02 filter ##########
+ seq  len    dark   edge  karar
+   0 1322  -0.013  0.057  bulut ✗
+   1   75  -0.042  0.335  bulut ✗
+   2 3419  -0.006  0.048  bulut ✗
+   3 3419   0.011  0.081  bulut ✗
+   4 2656  -0.049  0.062  bulut ✗
+   5  808   0.009  0.069  bulut ✗
+   6 2018  -0.005  0.066  bulut ✗
+   7 1108   0.009  0.089  bulut ✗
+   8 1423  -0.007  0.055  bulut ✗
+   9   92  -0.008  0.309  bulut ✗
+  10 2638  -0.016  0.098  bulut ✗
+  11 1033  -0.012  0.078  bulut ✗
+  12 3377  -0.019  0.059  bulut ✗
+  13   37   0.091  0.123  DRONE ✓
+  14  951   0.050  0.120  DRONE ✓
+  15 1575   0.058  0.228  DRONE ✓
+  16  379   0.064  0.210  DRONE ✓
+  17 2317   0.033  0.131  DRONE ✓
+  18 2337   0.040  0.138  DRONE ✓
+  19 2137   0.007  0.129  bulut ✗
+  20 2027   0.018  0.072  bulut ✗
+  21 2017   0.008  0.087  bulut ✗
+  22 1427   0.054  0.155  DRONE ✓
+  23 1027  -0.038  0.124  bulut ✗
+  24  807   0.110  0.135  DRONE ✓
+  25  269   0.042  0.100  bulut ✗
+  26  487  -0.095  0.050  bulut ✗
+
+Kabul: 8 drone trajectory (9830 kare-kutu) | Red: 19 bulut
+→ data/pseudo/flight_02_clean.csv
+[OK] flight_02 filter (97s)
+
+########## flight_03 / collect ##########
+flight_03_085014: 32 trajectory, 35261 kare-kutu → data/pseudo/flight_03_raw.csv
+  uzunluk: min=27 ort=1101 max=2955
+[OK] flight_03 / collect (169s)
+
+########## flight_03 filter ##########
+ seq  len    dark   edge  karar
+   0   90  -0.007  0.491  bulut ✗
+   1 2419   0.009  0.098  bulut ✗
+   2 2955   0.004  0.061  bulut ✗
+   3 2784  -0.003  0.070  bulut ✗
+   4   27   0.008  0.451  bulut ✗
+   5 1290   0.004  0.104  bulut ✗
+   6  514   0.038  0.151  DRONE ✓
+   7  167  -0.010  0.288  bulut ✗
+   8  135  -0.013  0.339  bulut ✗
+   9 1263  -0.007  0.089  bulut ✗
+  10 2955  -0.003  0.071  bulut ✗
+  11 1371  -0.002  0.081  bulut ✗
+  12 2181  -0.045  0.079  bulut ✗
+  13  545   0.030  0.128  DRONE ✓
+  14   47   0.067  0.113  bulut ✗
+  15  162   0.047  0.159  DRONE ✓
+  16  190  -0.025  0.085  bulut ✗
+  18 1769   0.033  0.119  bulut ✗
+  19  933   0.004  0.054  bulut ✗
+  20 2435   0.010  0.090  bulut ✗
+  21  711   0.082  0.160  DRONE ✓
+  22 1685  -0.032  0.036  bulut ✗
+  23 1655  -0.042  0.037  bulut ✗
+  24 1625   0.035  0.094  bulut ✗
+  25 1026   0.064  0.159  DRONE ✓
+  26  361   0.079  0.168  DRONE ✓
+  27 1205   0.045  0.091  bulut ✗
+  28  835  -0.000  0.037  bulut ✗
+  29  703   0.011  0.192  bulut ✗
+  30  555   0.101  0.265  DRONE ✓
+  31  503   0.012  0.289  bulut ✗
+  32  165  -0.001  0.037  bulut ✗
+
+Kabul: 7 drone trajectory (3874 kare-kutu) | Red: 25 bulut
+→ data/pseudo/flight_03_clean.csv
+[OK] flight_03 filter (111s)
+
+########## TAMAMLANDI ##########
+   20238 data/pseudo/flight_01_clean.csv
+    9831 data/pseudo/flight_02_clean.csv
+    3875 data/pseudo/flight_03_clean.csv
+   33944 total

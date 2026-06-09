@@ -3,6 +3,7 @@
 add_library(dtrack_guidance STATIC
   src/ncc_template_tracker.cpp
   src/nano_siamese_tracker.cpp
+  src/lock_integrity.cpp
   src/guidance_controller.cpp)
 target_include_directories(dtrack_guidance PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(dtrack_guidance PUBLIC

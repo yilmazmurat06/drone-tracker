@@ -53,3 +53,9 @@ target_link_libraries(test_guidance PRIVATE
   dtrack_guidance
   GTest::gtest_main)
 gtest_discover_tests(test_guidance)
+
+add_executable(test_lock_integrity test_lock_integrity.cpp)
+target_link_libraries(test_lock_integrity PRIVATE
+  dtrack_guidance
+  GTest::gtest_main)
+gtest_discover_tests(test_lock_integrity)

@@ -14,15 +14,23 @@
 //
 //  DURUMLAR:
 //    SEARCH  : kilit yok. Adaylar pilota sunulur. select(i) → TRACK.
-//    TRACK   : tek-hedef tracker sürer. confidence < suspect_conf (suspect_frames
-//              kare boyunca) → SUSPECT. release() → SEARCH.
+//    TRACK   : tek-hedef tracker sürer. İKİ bağımsız bekçi SUSPECT'e atar:
+//              (1) confidence < suspect_conf (suspect_frames kare) — tracker'ın
+//                  KENDİ güveni; (2) LOCK-INTEGRITY — güven yüksek olsa bile kutu
+//                  geometrisi bozulursa (çevre artık gök değil / kutu patladı /
+//                  ışınlandı) ANINDA SUSPECT. Çünkü görsel tracker yere/buluta
+//                  kilitlenince de kendinden emindir; güven tek başına yetmez.
 //    SUSPECT : "doğru şeyi mi takip ediyorum?" Detector tam görevde; takip edilen
-//              bölgede DRONE-DOĞRULAMA (ClutterDiscriminator yer tutucu, ileride
-//              int8 sınıflandırma kafası). Doğrulandı → tracker'ı yeniden tohumla
-//              → TRACK. confidence < lost_conf veya doğrulanamaz → SEARCH.
+//              bölge DRONE-DOĞRULANIR (P3 skoru + gök-çevre AND koşulu → yerdeki
+//              clutter'a yeniden kilitlenmeyi engeller). Doğrulandı → tracker'ı
+//              yeniden tohumla → TRACK. confidence < lost_conf veya doğrulanamaz
+//              + süre dolar → SEARCH.
 //
-//  DONANIM: tracker NPU-hedefli (ISingleTargetTracker enjekte edilir); detector
-//  ve discriminator CPU'da kalır (hibrit). Controller donanımdan bağımsızdır.
+//  DAR ROI: kilit sonrası işlem hedefi izleyen dar pencerede (roi_margin×kutu)
+//  yoğunlaşır (bkz. Out::roi) — STM32N6'da az piksel = az M55 yükü + az clutter.
+//
+//  DONANIM: tracker NPU-hedefli (ISingleTargetTracker enjekte edilir); detector,
+//  discriminator ve LockIntegrity M55 CPU'da kalır (hibrit). Controller donanım-bağımsız.
 // ============================================================================
 #include <vector>
 
@@ -30,6 +38,7 @@
 
 #include "dtrack/core/types.hpp"
 #include "dtrack/detection/discriminator.hpp"
+#include "dtrack/guidance/lock_integrity.hpp"
 #include "dtrack/guidance/single_target_tracker.hpp"
 
 namespace dtrack {
@@ -44,6 +53,14 @@ public:
         int   suspect_frames = 3;     // ardışık kaç düşük-güven kare → SUSPECT
         float verify_score   = 0.50f; // SUSPECT'te drone-doğrulama (P3 skoru) eşiği
         int   reacquire_frames = 8;   // SUSPECT'te kaç kare doğrulama denenir → sonra SEARCH
+
+        // --- LOCK-INTEGRITY (kilit-bütünlüğü geometrik bekçisi) ---
+        bool  use_integrity  = true;  // false → tam eski davranış (yalnız güven)
+        float sky_ring_min   = 0.55f; // kutu çevre halkası gök oranı bunun altı → yere sürüklenme
+        float max_area_frac  = 0.08f; // kutu kare alanının bu kadarından büyükse → patlama
+        float max_growth     = 4.0f;  // kilit kutusuna göre >bu kat büyüme → patlama
+        float max_jump_frac  = 0.5f;  // merkez sıçraması > bu × ROI-yan → ışınlanma
+        float roi_margin     = 2.0f;  // dar işlem penceresi = bu × max(kutu en/boy)
     };
 
     // Tracker (NPU-hedefli) ve discriminator (CPU) dışarıdan enjekte edilir.
@@ -58,7 +75,10 @@ public:
         State                   state = State::Search;
         std::vector<Detection>  candidates;        // SEARCH/SUSPECT: numaralı adaylar
         cv::Rect                target;            // TRACK/SUSPECT: kilitli hedef kutusu
+        cv::Rect                roi;               // TRACK/SUSPECT: dar işlem penceresi (boş=SEARCH)
         float                   confidence = 0.f;  // tek-hedef tracker güveni
+        float                   sky = 1.f;         // ölçülen gök-çevre oranı (HUD)
+        const char*             integrity_reason = ""; // bütünlük düştüyse eksen: sky/size/motion
         bool                    has_target = false;
     };
 
@@ -90,8 +110,20 @@ private:
     int                   suspect_count_  = 0;  // SUSPECT'te geçen kare sayısı
     bool                  needs_init_ = false;  // select() sonrası tracker.init() bekliyor
 
-    // SUSPECT'te takip bölgesinin gerçekten drone olup olmadığını doğrula.
-    bool verify_target(const std::vector<Detection>& cands, Detection* matched) const;
+    cv::Rect              prev_box_;            // bir önceki kutu (hareket sağlığı için)
+    cv::Rect              lock_box0_;           // kilit/yeniden-tohum anındaki kutu (büyüme referansı)
+    float                 last_sky_ = 1.f;      // son ölçülen gök-çevre oranı (HUD)
+    const char*           last_reason_ = "";    // son bütünlük-düşüş ekseni (HUD)
+
+    // SUSPECT'te takip bölgesinin gerçekten drone olup olmadığını doğrula (+ gök-çevre koşulu).
+    bool verify_target(const cv::Mat& frame, const std::vector<Detection>& cands,
+                       Detection* matched) const;
+
+    // Kilit-bütünlüğü: kutu geometrisi hâlâ "havada gerçek hedef" mi? (boyut+hareket+gök).
+    IntegrityResult check_integrity(const cv::Mat& frame, const cv::Rect& box) const;
+
+    // Hedefi izleyen dar işlem penceresi (roi_margin × max(kutu en/boy), kareye kırpılı).
+    cv::Rect dynamic_roi(const cv::Mat& frame, const cv::Rect& box) const;
 };
 
 } // namespace dtrack

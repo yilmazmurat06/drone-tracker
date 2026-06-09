@@ -144,6 +144,42 @@ TEST(Guidance, SuspectGivesUpToSearch) {
     EXPECT_FALSE(out.has_target);
 }
 
+// LOCK-INTEGRITY: yüksek güven ama kutu ÇEVRESİ gök değil (çimen) → SUSPECT.
+// Güveni ezen geometrik bekçi: tracker yere sürüklenince güven yalan söyler.
+TEST(Guidance, LowSkyRingTriggersSuspectDespiteHighConfidence) {
+    FakeTracker trk; FakeVerifier ver;
+    GuidanceController::Params p;  // integrity varsayılan açık, sky_ring_min=0.55
+    GuidanceController ctrl(trk, ver, p);
+    cv::Mat grass(480, 640, CV_8UC3, cv::Scalar(40, 130, 60));  // yeşil-baskın koyu çimen
+    std::vector<Detection> cands{make_cand({300, 220, 40, 40}, 0.9f)};
+    GuidanceController::Out out;
+    ctrl.on_frame(grass, cands, out);
+    ctrl.select(0);
+
+    trk.next_conf = 0.95f; trk.next_box = {300, 220, 40, 40};
+    ctrl.on_frame(grass, {}, out);  // yüksek güven AMA çimen çevre → integrity FAIL
+    EXPECT_EQ(out.state, GuidanceController::State::Suspect);
+    EXPECT_STREQ(out.integrity_reason, "sky");
+    EXPECT_LT(out.sky, p.sky_ring_min);
+}
+
+// LOCK-INTEGRITY yanlış-pozitif kontrolü: gök-çevreli gerçek hedef → TRACK korunur.
+TEST(Guidance, HighSkyRingStaysTracking) {
+    FakeTracker trk; FakeVerifier ver;
+    GuidanceController ctrl(trk, ver);  // varsayılan (integrity açık)
+    cv::Mat sky(480, 640, CV_8UC3, cv::Scalar(235, 170, 90));   // mavi-baskın + parlak gök
+    std::vector<Detection> cands{make_cand({300, 220, 40, 40}, 0.9f)};
+    GuidanceController::Out out;
+    ctrl.on_frame(sky, cands, out);
+    ctrl.select(0);
+
+    trk.next_conf = 0.95f; trk.next_box = {300, 220, 40, 40};
+    ctrl.on_frame(sky, {}, out);
+    EXPECT_EQ(out.state, GuidanceController::State::Track);
+    EXPECT_GT(out.sky, 0.9f);
+    EXPECT_TRUE(out.roi.area() > 0);  // TRACK'te dar işlem penceresi üretiliyor
+}
+
 // release() her durumdan SEARCH'e döner.
 TEST(Guidance, ReleaseReturnsToSearch) {
     FakeTracker trk; FakeVerifier ver;
