@@ -35,7 +35,8 @@ public:
     NanoSiameseTracker() : NanoSiameseTracker(Params{}) {}
     explicit NanoSiameseTracker(Params p);
 
-    void init(const cv::Mat& frame, const cv::Rect& bbox) override;
+    cv::Rect init(const cv::Mat& frame, const cv::Rect& bbox,
+                  bool refine = true) override;
     STResult track(const cv::Mat& frame) override;
 
 private:

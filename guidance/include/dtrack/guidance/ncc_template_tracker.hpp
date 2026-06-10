@@ -36,7 +36,8 @@ public:
     NccTemplateTracker() = default;
     explicit NccTemplateTracker(Params p) : p_(p) {}
 
-    void init(const cv::Mat& frame, const cv::Rect& bbox) override;
+    cv::Rect init(const cv::Mat& frame, const cv::Rect& bbox,
+                  bool refine = true) override;
     STResult track(const cv::Mat& frame) override;
 
 private:

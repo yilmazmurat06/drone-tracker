@@ -29,13 +29,15 @@ NanoSiameseTracker::NanoSiameseTracker(Params p) : p_(std::move(p)) {
     trk_ = cv::TrackerNano::create(tp);
 }
 
-void NanoSiameseTracker::init(const cv::Mat& frame, const cv::Rect& bbox) {
+cv::Rect NanoSiameseTracker::init(const cv::Mat& frame, const cv::Rect& bbox,
+                                  bool /*refine*/) {
     const cv::Mat img = to_bgr(frame);
     cv::Rect b = bbox & cv::Rect(0, 0, img.cols, img.rows);
-    if (b.area() <= 0) { ready_ = false; return; }
+    if (b.area() <= 0) { ready_ = false; return b; }
     trk_->init(img, b);
     last_box_ = b;
     ready_    = true;
+    return b;   // rafine etmez: kırpılmış tohum = etkin kutu
 }
 
 STResult NanoSiameseTracker::track(const cv::Mat& frame) {

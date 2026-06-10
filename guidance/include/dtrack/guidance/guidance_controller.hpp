@@ -51,6 +51,13 @@ public:
         float suspect_conf   = 0.50f; // bu güvenin altı → şüphe sayacı işler
         float lost_conf      = 0.30f; // bu güvenin altı → doğrudan hedef kaybı (SEARCH)
         int   suspect_frames = 3;     // ardışık kaç düşük-güven kare → SUSPECT
+        // COAST: lost_conf altı kaç ARDIŞIK karede SUSPECT tetikler. NEDEN: YOLO-ROI
+        // tracker'da conf=0 "bu karede tespit yok" demek (kare-kare classifier doğası;
+        // ölçüldü: 58/58 TRACK→SUSPECT geçişi conf=0 kaynaklı, 3327-3389'da 2-kare
+        // periyotlu salınım). Tek karelik kaçırmada kilidi şüpheye atmak çırpınma
+        // üretir; tracker miss-expansion ile zaten arama penceresini büyütüyor.
+        // 1 = eski davranış (anlık).
+        int   lost_frames    = 3;
         float verify_score   = 0.50f; // SUSPECT'te drone-doğrulama (P3 skoru) eşiği
         int   reacquire_frames = 8;   // SUSPECT'te kaç kare doğrulama denenir → sonra SEARCH
 
@@ -66,6 +73,21 @@ public:
         float verify_edge_min = 0.10f;// reseed adayı kenar yoğunluğu eşiği — gök-çevre +
                                       // boyut bandını GEÇEN bulut tutamını eler (bulut
                                       // yumuşak, drone keskin; yalnız re-acquire'da)
+        // Büyüme referansı (lock_box0_) adaptasyonu: integrity GEÇEN her karede
+        // referans bu hızla mevcut kutuya yaklaşır. NEDEN: referans kilit anına
+        // sabit kalırsa MEŞRU yaklaşma büyümesi (ölçüldü: alan ~%3/kare, 87→298px)
+        // eninde sonunda max_growth'a takılıp kilidi düşürür; re-acquire boyut
+        // bandı da büyümüş hedefi reddeder. %3/kare meşru yaklaşmayı izler; drift
+        // patlamasını (ölçüldü: ~%15+/kare) İZLEYEMEZ → patlama yine yakalanır.
+        // 0 = kapalı (eski davranış).
+        float growth_adapt   = 0.03f;
+        // SIZE ekseni kaç ARDIŞIK kare ihlalde SUSPECT tetikler. NEDEN yalnız size:
+        // sky ekseni KESİN sinyaldir (yer kilidi ilk karede yakalanmalı — kanıtlı
+        // değer, anlık kalır); size ekseni ise GÜRÜLTÜLÜ (YOLO "gövde"↔"gövde+
+        // pervane" hipotez salınımı + tek karelik dejenere snap, ölçüldü 96×36).
+        // Drift patlaması karelerce sürer (ölçüldü ~%15/kare × 10+ kare) → 3 kare
+        // gecikme yakalamayı kaybettirmez, geçici salınım kilidi düşürmez. 1=eski.
+        int   size_fail_frames = 3;
     };
 
     // Tracker (NPU-hedefli) ve discriminator (CPU) dışarıdan enjekte edilir.
@@ -100,6 +122,15 @@ public:
     // Kilidi bırak → SEARCH.
     void release();
 
+    // EGO-HAREKET TELAFİSİ: tüm kutu durumunu (hedef, çapa, hareket referansı)
+    // M ile yeni karenin çerçevesine taşı; tracker'ın iç konumu da taşınır.
+    // on_frame'den ÖNCE çağrılır. M = bir ÖNCEKİ karenin stabilizasyon
+    // homografisinin TERSİ: warped(t-1) koordinatları raw(t-2) çerçevesinde,
+    // warped(t) ise raw(t-1) çerçevesinde — aradaki dönüşüm H(t-1)⁻¹.
+    // Telafi yoksa kamera sarsıntısı (a) arama penceresini hedeften kaçırır
+    // (conf=0), (b) merkez sıçraması motion-integrity'yi sahte tetikler.
+    void compensate(const cv::Matx33f& M);
+
     State state() const { return state_; }
 
 private:
@@ -112,6 +143,8 @@ private:
     cv::Rect              target_;
     float                 confidence_ = 0.f;
     int                   low_conf_count_ = 0;  // ardışık düşük-güven kare sayacı
+    int                   lost_count_ = 0;      // ardışık lost_conf-altı kare sayacı (coast)
+    int                   size_fail_count_ = 0; // ardışık size-ihlali kare sayacı
     int                   suspect_count_  = 0;  // SUSPECT'te geçen kare sayısı
     bool                  needs_init_ = false;  // select() sonrası tracker.init() bekliyor
 

@@ -39,10 +39,31 @@ public:
     virtual ~ISingleTargetTracker() = default;
 
     // Kilitli hedef kutusundan şablonu çıkar (yeniden tohumlama için de çağrılır).
-    virtual void init(const cv::Mat& frame, const cv::Rect& bbox) = 0;
+    // DÖNÜŞ: etkin kilit kutusu. Tracker tohumu RAFİNE EDEBİLİR (örn. YOLO tohum
+    // blobunu kendi sıkı tespitine oturtur); çağıran (GuidanceController) boyut/
+    // hareket referanslarını DÖNEN kutuya kurmalı — tohum detector blobu gevşek
+    // olabilir, referans yanlış kurulursa integrity sonsuz FAIL(size) döngüsüne
+    // girer (ölçüldü). Rafine etmeyen tracker bbox'ı (kareye kırpıp) aynen döndürür.
+    //
+    // refine: bbox GEVŞEK bir detector blobu mu (true → tracker kendi sıkı kutusuna
+    // oturtabilir) yoksa ZATEN SIKI bir kutu mu (false → olduğu gibi benimse, yeniden
+    // snap YOK). İlk pilot-pikseli kilidi gevşek blob verir (refine=true); re-acquire
+    // zaten doğrulanmış sıkı YOLO adayı verir (refine=false) — yeniden snap, kararlı
+    // kılmaya çalıştığımız hipotez seçimini yeniden açıp kutuyu patlatır (ölçüldü,
+    // kare 3185: 128×94 → 320×181). Şablon-tabanlı tracker'lar için anlamsız (yok say).
+    virtual cv::Rect init(const cv::Mat& frame, const cv::Rect& bbox,
+                          bool refine = true) = 0;
 
     // Bu karede hedefi ara; bbox + güven döndür. init() çağrılmadan çağrılmamalı.
     virtual STResult track(const cv::Mat& frame) = 0;
+
+    // EGO-HAREKET TELAFİSİ: iç hedef konumunu M homografisiyle yeni karenin
+    // koordinat çerçevesine taşı (track()'ten ÖNCE çağrılır). NEDEN: stabilizer
+    // her kareyi bir önceki HAM kareye hizalar → ardışık warped kareler AYNI
+    // çerçevede DEĞİL; kamera sarsıntısında arama penceresi hedefin yanına
+    // düşer (ölçüldü: conf=0 koşuları). Varsayılan no-op (şablon tracker'ların
+    // arama bölgesi göreli, controller kutuları zaten taşır).
+    virtual void apply_motion(const cv::Matx33f& /*M*/) {}
 };
 
 } // namespace dtrack

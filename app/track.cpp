@@ -40,6 +40,7 @@
 #include "dtrack/guidance/guidance_controller.hpp"
 #include "dtrack/guidance/nano_siamese_tracker.hpp"
 #include "dtrack/guidance/ncc_template_tracker.hpp"
+#include "dtrack/guidance/yolo_roi_tracker.hpp"
 #include "dtrack/io/recorded_frame_source.hpp"
 #include "dtrack/io/telemetry_log.hpp"
 #include "dtrack/stabilization/gyro_flow_stabilizer.hpp"
@@ -88,6 +89,10 @@ struct Args {
     bool   use_siamese  = false;
     std::string nano_backbone = "models/nanotrack_backbone_sim.onnx";
     std::string nano_head     = "models/nanotrack_head_sim.onnx";
+    // FAZ 4: --yolo → eğitilmiş YOLO-in-ROI tracker (tracking-by-detection).
+    // Güveni "drone-luk" ölçer (NanoTrack'in doygun benzerlik skorunun aksine).
+    bool   use_yolo     = false;
+    std::string yolo_model    = "models/yolo11_drone.onnx";
     // Headless A/B değerlendirmesi için "pilot" simülasyonu: bu kareden itibaren,
     // SEARCH'te aday varsa nişangah MERKEZİNE en yakın adayı otomatik kilitle.
     // -1 = kapalı (GUI'de manuel seçim). dump modunda spike ölçümü için kullanılır.
@@ -148,6 +153,8 @@ Args parse_args(int argc, char** argv) {
         else if (s == "--siamese")                       a.use_siamese   = true;
         else if (s == "--nano-backbone" && i + 1 < argc) a.nano_backbone = argv[++i];
         else if (s == "--nano-head"     && i + 1 < argc) a.nano_head     = argv[++i];
+        else if (s == "--yolo")                          a.use_yolo      = true;
+        else if (s == "--yolo-model"    && i + 1 < argc) { a.use_yolo = true; a.yolo_model = argv[++i]; }
         else if (s == "--auto-lock"     && i + 1 < argc) a.auto_lock_at  = std::stoi(argv[++i]);
         else if (s == "--auto-lock-px"  && i + 1 < argc) {
             int x, y;
@@ -248,7 +255,19 @@ int main(int argc, char** argv) {
     // Tracker seçimi (FAZ 1 spike): --siamese → hazır NanoTrack; yoksa NCC stub.
     // Polimorfik: GuidanceController yalnız ISingleTargetTracker& görür (değişmez).
     std::unique_ptr<dtrack::ISingleTargetTracker> st_tracker;
-    if (args.use_siamese) {
+    if (args.use_yolo) {
+        // FAZ 4: eğitilmiş YOLO-in-ROI. Öncelik YOLO'da (--yolo --siamese birlikte
+        // verilirse YOLO kazanır); kurulamazsa aşağıdaki zincire (Nano/NCC) düşer.
+        try {
+            st_tracker = std::make_unique<dtrack::YoloRoiTracker>(
+                dtrack::YoloRoiTracker::Params{args.yolo_model});
+            std::cout << "tracker: YOLO-in-ROI — " << args.yolo_model << "\n";
+        } catch (const std::exception& e) {
+            std::cerr << "UYARI: YOLO kurulamadi (" << e.what()
+                      << ") → siradaki tracker'a donuluyor\n";
+        }
+    }
+    if (!st_tracker && args.use_siamese) {
         try {
             st_tracker = std::make_unique<dtrack::NanoSiameseTracker>(
                 dtrack::NanoSiameseTracker::Params{args.nano_backbone, args.nano_head});
@@ -264,6 +283,22 @@ int main(int argc, char** argv) {
     }
     dtrack::GuidanceController::Params gp;
     gp.use_integrity = (args.use_integrity != 0);
+    if (args.use_yolo && st_tracker) {
+        // YOLO güven SEMANTİĞİ NanoTrack'ten farklı: Nano doygun ~0.8 üretir
+        // (0.3 altı = gerçek kopma); YOLO ise kare-kare doğal dalgalanır (0.28
+        // dipleri normal, ölçüldü) ve TESPİT YOKSA zaten tam 0 döner — ayrım net.
+        // Eşikler buna göre: tek-kare dip SUSPECT tetiklemesin; sayaçlı eşik
+        // (suspect_conf×3 kare) görevde kalır. verify_score düşürülür: YOLO'nun
+        // kendisi her kare appearance doğruladığı için P3 ikincil kapı.
+        gp.lost_conf    = 0.05f;
+        gp.suspect_conf = 0.35f;
+        gp.verify_score = 0.35f;
+        // Re-acquire SABRI: detector SUSPECT'te zaten her kare tam görevde (aday
+        // üretimi bedava) ve kilit TEK ATIMLIK (düşerse pilot yeniden seçene dek
+        // hedef YOK). 8 karelik bütçe, kutu kötü re-seed'le çapadan uzaklaştığında
+        // yetmiyor (ölçüldü: hedef ringde, çapa 190px ötede). Sabırlı ol.
+        gp.reacquire_frames = 30;
+    }
     dtrack::GuidanceController guide(*st_tracker, disc, gp);
     MouseState mouse; mouse.ctrl = &guide;
 
@@ -298,6 +333,12 @@ int main(int argc, char** argv) {
 
         cv::Matx33f H;
         stab.stabilize(frame, window, warped, H);
+        // NOT: ego-hareket telafisi (guide.compensate(H⁻¹)) ÖLÇÜLDÜ ve BAĞLANMADI:
+        // OF homografisi YER özelliklerine oturur (gökte köşe yok) → dönme + yer-
+        // paralaksı içerir; paralaks GÖK hedefi için sahtedir ve ardışık warped
+        // karelerde zaten yaklaşık sadeleşir. Telafi sadeleşen terimi geri enjekte
+        // eder (400 kare A/B: TRACK 111→99). Gelecek iş: gyro'dan SAF-DÖNME
+        // homografisiyle telafi (paralaks içermez → gökte geçerli).
 
         // Manuel kilit (boresight) ROI: karenin en-boy oranıyla orantılı, ortalı kutu.
         // Aramayı bu kutuya sabitler → pilot hedefi merkeze alıp kilitler (otomatik cue

@@ -19,7 +19,9 @@ struct FakeTracker : ISingleTargetTracker {
     float    next_conf = 1.0f;
     cv::Rect next_box{10, 10, 20, 20};
     int      init_calls = 0;
-    void init(const cv::Mat&, const cv::Rect& b) override { ++init_calls; next_box = b; }
+    cv::Rect init(const cv::Mat&, const cv::Rect& b, bool /*refine*/ = true) override {
+        ++init_calls; next_box = b; return b;
+    }
     STResult track(const cv::Mat&) override { return {next_box, next_conf}; }
 };
 
@@ -95,6 +97,7 @@ TEST(Guidance, LowConfidenceTriggersSuspect) {
     GuidanceController::Out out;
     ctrl.on_frame(kFrame, cands, out);
     ctrl.select(0);
+    ctrl.on_frame(kFrame, {}, out);  // kilit karesi = tohumlama (track koşmaz)
 
     trk.next_conf = 0.4f;  // suspect_conf altı ama lost_conf üstü
     for (int i = 0; i < 2; ++i) { ctrl.on_frame(kFrame, {}, out); }
@@ -117,6 +120,7 @@ TEST(Guidance, SuspectReacquiresOnVerify) {
     GuidanceController::Out out;
     ctrl.on_frame(frame, cands, out);
     ctrl.select(0);
+    ctrl.on_frame(frame, {}, out);  // kilit karesi = tohumlama (track koşmaz)
 
     trk.next_conf = 0.4f;  trk.next_box = {10, 10, 20, 20};
     ctrl.on_frame(frame, {}, out);             // → SUSPECT
@@ -139,6 +143,7 @@ TEST(Guidance, SuspectGivesUpToSearch) {
     GuidanceController::Out out;
     ctrl.on_frame(kFrame, cands, out);
     ctrl.select(0);
+    ctrl.on_frame(kFrame, {}, out);  // kilit karesi = tohumlama (track koşmaz)
 
     trk.next_conf = 0.4f;
     ctrl.on_frame(kFrame, {}, out);             // → SUSPECT
@@ -161,6 +166,7 @@ TEST(Guidance, LowSkyRingTriggersSuspectDespiteHighConfidence) {
     GuidanceController::Out out;
     ctrl.on_frame(grass, cands, out);
     ctrl.select(0);
+    ctrl.on_frame(grass, {}, out);  // kilit karesi = tohumlama (track koşmaz)
 
     trk.next_conf = 0.95f; trk.next_box = {300, 220, 40, 40};
     ctrl.on_frame(grass, {}, out);  // yüksek güven AMA çimen çevre → integrity FAIL
@@ -268,6 +274,37 @@ TEST(Guidance, ReacquireRejectsSoftCloudCandidate) {
     ctrl.on_frame(sky, sus, out);
     EXPECT_EQ(out.state, GuidanceController::State::Suspect);
     EXPECT_EQ(trk.init_calls, before);
+}
+
+// EGO-HAREKET TELAFİSİ: kamera sarsıntısı (büyük öteleme) compensate() ile
+// bildirilirse, sarsıntıyı izleyen kutu motion-integrity'yi TETİKLEMEZ — telafi
+// prev_box_'u da taşıdığı için sıçrama "ışınlanma" sayılmaz.
+TEST(Guidance, CompensateAbsorbsEgoMotionJump) {
+    FakeTracker trk; FakeVerifier ver;
+    GuidanceController ctrl(trk, ver);
+    cv::Mat sky(720, 1280, CV_8UC3, cv::Scalar(235, 170, 90));
+    std::vector<Detection> cands{make_cand({300, 220, 40, 40}, 0.9f)};
+    GuidanceController::Out out;
+    ctrl.on_frame(sky, cands, out);
+    ctrl.select(0);
+    ctrl.on_frame(sky, {}, out);  // kilit karesi = tohumlama
+
+    trk.next_conf = 0.9f; trk.next_box = {300, 220, 40, 40};
+    ctrl.on_frame(sky, {}, out);                  // sağlam TRACK
+    ASSERT_EQ(out.state, GuidanceController::State::Track);
+
+    // Kamera 100px sağa sıçradı: hedef görüntüde 100px sola kayar. Telafi bildir,
+    // tracker da kaymış konumu raporlasın → TRACK sürmeli (motion FAIL yok).
+    const cv::Matx33f shift(1, 0, -100, 0, 1, 0, 0, 0, 1);
+    ctrl.compensate(shift);
+    trk.next_box = {200, 220, 40, 40};
+    ctrl.on_frame(sky, {}, out);
+    EXPECT_EQ(out.state, GuidanceController::State::Track);
+
+    // Karşılaştırma: telafi BİLDİRİLMEDEN aynı sıçrama → motion FAIL → SUSPECT.
+    trk.next_box = {340, 220, 40, 40};            // 140px ani sıçrama, telafisiz
+    ctrl.on_frame(sky, {}, out);
+    EXPECT_EQ(out.state, GuidanceController::State::Suspect);
 }
 
 // release() her durumdan SEARCH'e döner.

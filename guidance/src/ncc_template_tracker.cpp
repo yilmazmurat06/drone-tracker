@@ -19,13 +19,15 @@ cv::Mat to_gray(const cv::Mat& img) {
 }
 }  // namespace
 
-void NccTemplateTracker::init(const cv::Mat& frame, const cv::Rect& bbox) {
+cv::Rect NccTemplateTracker::init(const cv::Mat& frame, const cv::Rect& bbox,
+                                  bool /*refine*/) {
     const cv::Mat gray = to_gray(frame);
     cv::Rect b = bbox & cv::Rect(0, 0, gray.cols, gray.rows);
-    if (b.area() <= 0) { have_templ_ = false; return; }
+    if (b.area() <= 0) { have_templ_ = false; return b; }
     templ_      = gray(b).clone();   // şablonu (z) sakla
     last_box_   = b;
     have_templ_ = true;
+    return b;   // rafine etmez: kırpılmış tohum = etkin kutu
 }
 
 STResult NccTemplateTracker::track(const cv::Mat& frame) {
