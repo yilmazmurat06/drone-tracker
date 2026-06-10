@@ -1,163 +1,171 @@
-[INFO] harvest_all başladı: Tue Jun  9 16:17:15 +03 2026
+[INFO] harvest_all başladı: Wed Jun 10 08:50:18 +03 2026
 [INFO] log: data/pseudo/harvest_all.log
 
 ########## flight_01 (exclude TEST 3084:3504) / collect ##########
-flight_01_084727: 60 trajectory, 69397 kare-kutu → data/pseudo/flight_01_raw.csv
-  uzunluk: min=34 ort=1156 max=3073
-[OK] flight_01 (exclude TEST 3084:3504) / collect (368s)
+flight_01_084727: 61 trajectory, 69413 kare-kutu → data/pseudo/flight_01_raw.csv
+  uzunluk: min=32 ort=1137 max=3073
+[OK] flight_01 (exclude TEST 3084:3504) / collect (352s)
 
 ########## flight_01 filter ##########
- seq  len    dark   edge  karar
-   0 3073   0.020  0.094  bulut ✗
-   1  163  -0.009  0.315  bulut ✗
-   2 3063   0.009  0.094  bulut ✗
-   3 1133   0.003  0.251  bulut ✗
-   4 3053  -0.026  0.055  bulut ✗
-   5   69  -0.042  0.348  bulut ✗
-   6   62  -0.025  0.371  bulut ✗
-   7 3053   0.001  0.081  bulut ✗
-   8   57  -0.042  0.427  bulut ✗
-   9  949  -0.007  0.100  bulut ✗
-  10   40   0.000  0.384  bulut ✗
-  11 3053  -0.001  0.057  bulut ✗
-  12 1840   0.079  0.175  DRONE ✓
-  13 2972   0.105  0.142  DRONE ✓
-  14  460   0.098  0.111  bulut ✗
-  15 1418  -0.047  0.086  bulut ✗
-  17 2573   0.046  0.160  DRONE ✓
-  18 2513   0.024  0.137  DRONE ✓
-  19  571   0.048  0.235  DRONE ✓
-  20 1913   0.009  0.121  bulut ✗
-  21 1563  -0.051  0.068  bulut ✗
-  22 1523   0.007  0.139  bulut ✗
-  23 1153   0.010  0.121  bulut ✗
-  24  303  -0.006  0.129  bulut ✗
-  26  971  -0.080  0.046  bulut ✗
-  27 1000  -0.089  0.046  bulut ✗
-  28 1078   0.031  0.120  DRONE ✓
-  29  978  -0.078  0.048  bulut ✗
-  30  982  -0.047  0.045  bulut ✗
-  31  981  -0.102  0.041  bulut ✗
-  32  443  -0.091  0.048  bulut ✗
-  33 1021  -0.008  0.069  bulut ✗
-  34 1024  -0.031  0.066  bulut ✗
-  35  679  -0.002  0.024  bulut ✗
-  36 1084   0.030  0.145  DRONE ✓
-  37 1017   0.076  0.139  DRONE ✓
-  38  291  -0.033  0.130  bulut ✗
-  39 2074  -0.051  0.054  bulut ✗
-  40  277   0.036  0.175  DRONE ✓
-  41 1738   0.036  0.111  bulut ✗
-  42 1774   0.003  0.080  bulut ✗
-  43 1671   0.047  0.130  DRONE ✓
-  44  836   0.028  0.134  DRONE ✓
-  45 1218  -0.009  0.089  bulut ✗
-  46 1702   0.065  0.138  DRONE ✓
-  47 1691   0.032  0.128  DRONE ✓
-  48 1168   0.009  0.118  bulut ✗
-  49 1724   0.064  0.108  bulut ✗
-  50 1674  -0.005  0.081  bulut ✗
-  51   59   0.003  0.134  bulut ✗
-  52 1604  -0.012  0.082  bulut ✗
-  53  846  -0.089  0.064  bulut ✗
-  54  216   0.030  0.161  DRONE ✓
-  55  196   0.041  0.124  DRONE ✓
-  56  222  -0.073  0.044  bulut ✗
-  57  324  -0.029  0.051  bulut ✗
-  58  104   0.007  0.087  bulut ✗
-  59   52  -0.031  0.180  bulut ✗
-  60   74  -0.019  0.117  bulut ✗
-  61   34   0.001  0.001  bulut ✗
+ seq   len    sky   edge  karar
+   0  1294   0.90   0.85  0.185  HAVA ✓ (kuyruk -1779)
+   1   154   0.44   0.49  0.331  yer ✗
+   2  1133      -      -      -  hiç geçen örnek yok ✗
+   3   136   0.98   0.95  0.429  HAVA ✓ (kuyruk -2442)
+   4    15   0.91   0.83  0.644  bulut/kısa ✗
+   5   161   0.99   0.98  0.434  HAVA ✓ (kuyruk -2892)
+   6    24   0.95   0.97  0.732  bulut/kısa ✗
+   7    27   0.99   0.99  0.456  HAVA ✓ (kuyruk -13)
+   8  1607   0.99   1.00  0.087  bulut/kısa ✗
+   9   309   0.98   1.00  0.278  HAVA ✓ (kuyruk -1647)
+  11    32      -      -      -  hiç geçen örnek yok ✗
+  12     1   1.00   1.00  0.500  bulut/kısa ✗
+  13  1445   0.98   0.98  0.035  bulut/kısa ✗
+  14  3003      -      -      -  hiç geçen örnek yok ✗
+  15     1   0.97   1.00  0.218  bulut/kısa ✗
+  16     1   0.93   1.00  0.106  bulut/kısa ✗
+  17   697      -      -      -  hiç geçen örnek yok ✗
+  18   190   0.87   0.84  0.282  HAVA ✓ (kuyruk -210)
+  19   730      -      -      -  hiç geçen örnek yok ✗
+  20   295   0.91   0.86  0.128  HAVA ✓ (kuyruk -826)
+  21  1370      -      -      -  hiç geçen örnek yok ✗
+  22    48   0.92   0.73  0.196  HAVA ✓ (kuyruk -864)
+  23   476   1.00   1.00  0.196  HAVA ✓ (kuyruk -528)
+  24   403   1.00   1.00  0.265  HAVA ✓
+  25   173   1.00   1.00  0.300  HAVA ✓
+  26   103   1.00   1.00  0.283  HAVA ✓
+  28   417      -      -      -  hiç geçen örnek yok ✗
+  29   349      -      -      -  hiç geçen örnek yok ✗
+  30   624   0.95   0.91  0.170  HAVA ✓ (kuyruk -454)
+  31   315      -      -      -  hiç geçen örnek yok ✗
+  32   809      -      -      -  hiç geçen örnek yok ✗
+  33   499      -      -      -  hiç geçen örnek yok ✗
+  34   337      -      -      -  hiç geçen örnek yok ✗
+  35   913   1.00   1.00  0.066  bulut/kısa ✗
+  36   933      -      -      -  hiç geçen örnek yok ✗
+  37     1   1.00   1.00  0.152  bulut/kısa ✗
+  38   571   1.00   1.00  0.232  HAVA ✓ (kuyruk -513)
+  39   642   0.95   0.90  0.181  HAVA ✓ (kuyruk -375)
+  40   961   0.79   0.68  0.098  yer ✗
+  41  2005      -      -      -  hiç geçen örnek yok ✗
+  42     1   0.88   0.96  0.135  bulut/kısa ✗
+  43     1   0.86   0.87  0.190  bulut/kısa ✗
+  44   403   0.72   0.43  0.151  yer ✗
+  45  1734      -      -      -  hiç geçen örnek yok ✗
+  46    48      -      -      -  hiç geçen örnek yok ✗
+  47     1   0.92   0.78  0.123  bulut/kısa ✗
+  48   288   0.85   0.95  0.146  yer ✗
+  49  1326   0.74   0.52  0.139  yer ✗
+  50  1199   0.71   0.55  0.131  yer ✗
+  51   232   0.94   1.00  0.193  HAVA ✓ (kuyruk -867)
+  52  1033   0.80   0.61  0.151  yer ✗
+  53   368   0.93   0.91  0.061  bulut/kısa ✗
+  54   358   0.69   0.52  0.138  yer ✗
+  55   461   0.88   0.81  0.097  bulut/kısa ✗
+  56   504      -      -      -  hiç geçen örnek yok ✗
+  57   198      -      -      -  hiç geçen örnek yok ✗
+  58   344      -      -      -  hiç geçen örnek yok ✗
+  59   304      -      -      -  hiç geçen örnek yok ✗
+  60     1   0.91   0.91  0.194  bulut/kısa ✗
+  61    14   0.84   0.92  0.122  yer ✗
+  62    31   1.00   1.00  0.167  HAVA ✓ (kuyruk -43)
 
-Kabul: 15 drone trajectory (20237 kare-kutu) | Red: 45 bulut
+Kabul: 17 hava trajectory (5715 kare-kutu) | Red: 44
 → data/pseudo/flight_01_clean.csv
 [OK] flight_01 filter (206s)
 
 ########## flight_02 / collect ##########
-flight_02_084915: 27 trajectory, 41182 kare-kutu → data/pseudo/flight_02_raw.csv
-  uzunluk: min=37 ort=1525 max=3419
-[OK] flight_02 / collect (196s)
+flight_02_084915: 36 trajectory, 41217 kare-kutu → data/pseudo/flight_02_raw.csv
+  uzunluk: min=47 ort=1144 max=3087
+[OK] flight_02 / collect (215s)
 
 ########## flight_02 filter ##########
- seq  len    dark   edge  karar
-   0 1322  -0.013  0.057  bulut ✗
-   1   75  -0.042  0.335  bulut ✗
-   2 3419  -0.006  0.048  bulut ✗
-   3 3419   0.011  0.081  bulut ✗
-   4 2656  -0.049  0.062  bulut ✗
-   5  808   0.009  0.069  bulut ✗
-   6 2018  -0.005  0.066  bulut ✗
-   7 1108   0.009  0.089  bulut ✗
-   8 1423  -0.007  0.055  bulut ✗
-   9   92  -0.008  0.309  bulut ✗
-  10 2638  -0.016  0.098  bulut ✗
-  11 1033  -0.012  0.078  bulut ✗
-  12 3377  -0.019  0.059  bulut ✗
-  13   37   0.091  0.123  DRONE ✓
-  14  951   0.050  0.120  DRONE ✓
-  15 1575   0.058  0.228  DRONE ✓
-  16  379   0.064  0.210  DRONE ✓
-  17 2317   0.033  0.131  DRONE ✓
-  18 2337   0.040  0.138  DRONE ✓
-  19 2137   0.007  0.129  bulut ✗
-  20 2027   0.018  0.072  bulut ✗
-  21 2017   0.008  0.087  bulut ✗
-  22 1427   0.054  0.155  DRONE ✓
-  23 1027  -0.038  0.124  bulut ✗
-  24  807   0.110  0.135  DRONE ✓
-  25  269   0.042  0.100  bulut ✗
-  26  487  -0.095  0.050  bulut ✗
+ seq   len    sky   edge  karar
+   0   140   0.93   0.98  0.160  HAVA ✓ (kuyruk -1182)
+   1    75      -      -      -  hiç geçen örnek yok ✗
+   2   323   0.78   0.75  0.207  yer ✗
+   3     1   1.00   1.00  0.377  bulut/kısa ✗
+   4   319   0.77   0.75  0.246  yer ✗
+   5   225   0.51   0.50  0.185  yer ✗
+   6   865   0.89   0.88  0.169  HAVA ✓ (kuyruk -1189)
+   8   759   0.84   0.83  0.115  yer ✗
+   9   413   0.81   0.80  0.226  yer ✗
+  10   939   0.92   0.90  0.395  HAVA ✓
+  11    19   1.00   1.00  0.432  bulut/kısa ✗
+  12   665   0.89   0.78  0.144  HAVA ✓ (kuyruk -1440)
+  13   549      -      -      -  hiç geçen örnek yok ✗
+  14  3087      -      -      -  hiç geçen örnek yok ✗
+  15   191      -      -      -  hiç geçen örnek yok ✗
+  16    64   0.85   1.00  0.368  HAVA ✓ (kuyruk -110)
+  17   414   0.98   0.94  0.244  HAVA ✓ (kuyruk -49)
+  18    58      -      -      -  hiç geçen örnek yok ✗
+  19   354   0.99   0.99  0.248  HAVA ✓ (kuyruk -318)
+  20    16   0.95   0.95  0.285  bulut/kısa ✗
+  21   675   1.00   1.00  0.267  HAVA ✓ (kuyruk -1462)
+  22  1187      -      -      -  hiç geçen örnek yok ✗
+  23   665   0.94   0.81  0.229  HAVA ✓ (kuyruk -739)
+  24    20   0.98   0.99  0.259  bulut/kısa ✗
+  25     1   0.92   1.00  0.351  bulut/kısa ✗
+  26   925   0.79   0.62  0.101  yer ✗
+  27   901   0.96   0.99  0.212  HAVA ✓ (kuyruk -526)
+  28   454      -      -      -  hiç geçen örnek yok ✗
+  29   467   0.99   0.99  0.148  HAVA ✓ (kuyruk -340)
+  30   480      -      -      -  hiç geçen örnek yok ✗
+  31   364      -      -      -  hiç geçen örnek yok ✗
+  32   546      -      -      -  hiç geçen örnek yok ✗
+  33   577   0.56   0.16  0.087  yer ✗
+  34    18   0.94   0.74  0.222  bulut/kısa ✗
+  35   307      -      -      -  hiç geçen örnek yok ✗
+  36   141   0.96   0.99  0.136  HAVA ✓ (kuyruk -156)
 
-Kabul: 8 drone trajectory (9830 kare-kutu) | Red: 19 bulut
+Kabul: 12 hava trajectory (6290 kare-kutu) | Red: 24
 → data/pseudo/flight_02_clean.csv
-[OK] flight_02 filter (97s)
+[OK] flight_02 filter (132s)
 
 ########## flight_03 / collect ##########
-flight_03_085014: 32 trajectory, 35261 kare-kutu → data/pseudo/flight_03_raw.csv
-  uzunluk: min=27 ort=1101 max=2955
-[OK] flight_03 / collect (169s)
+flight_03_085014: 30 trajectory, 35215 kare-kutu → data/pseudo/flight_03_raw.csv
+  uzunluk: min=41 ort=1173 max=2955
+[OK] flight_03 / collect (180s)
 
 ########## flight_03 filter ##########
- seq  len    dark   edge  karar
-   0   90  -0.007  0.491  bulut ✗
-   1 2419   0.009  0.098  bulut ✗
-   2 2955   0.004  0.061  bulut ✗
-   3 2784  -0.003  0.070  bulut ✗
-   4   27   0.008  0.451  bulut ✗
-   5 1290   0.004  0.104  bulut ✗
-   6  514   0.038  0.151  DRONE ✓
-   7  167  -0.010  0.288  bulut ✗
-   8  135  -0.013  0.339  bulut ✗
-   9 1263  -0.007  0.089  bulut ✗
-  10 2955  -0.003  0.071  bulut ✗
-  11 1371  -0.002  0.081  bulut ✗
-  12 2181  -0.045  0.079  bulut ✗
-  13  545   0.030  0.128  DRONE ✓
-  14   47   0.067  0.113  bulut ✗
-  15  162   0.047  0.159  DRONE ✓
-  16  190  -0.025  0.085  bulut ✗
-  18 1769   0.033  0.119  bulut ✗
-  19  933   0.004  0.054  bulut ✗
-  20 2435   0.010  0.090  bulut ✗
-  21  711   0.082  0.160  DRONE ✓
-  22 1685  -0.032  0.036  bulut ✗
-  23 1655  -0.042  0.037  bulut ✗
-  24 1625   0.035  0.094  bulut ✗
-  25 1026   0.064  0.159  DRONE ✓
-  26  361   0.079  0.168  DRONE ✓
-  27 1205   0.045  0.091  bulut ✗
-  28  835  -0.000  0.037  bulut ✗
-  29  703   0.011  0.192  bulut ✗
-  30  555   0.101  0.265  DRONE ✓
-  31  503   0.012  0.289  bulut ✗
-  32  165  -0.001  0.037  bulut ✗
+ seq   len    sky   edge  karar
+   0    10   0.86   0.95  0.721  bulut/kısa ✗
+   1  1019   0.38   0.26  0.188  yer ✗
+   2  2955      -      -      -  hiç geçen örnek yok ✗
+   3     1   0.97   0.92  0.446  bulut/kısa ✗
+   4    82   0.96   1.00  0.467  HAVA ✓ (kuyruk -432)
+   5   135      -      -      -  hiç geçen örnek yok ✗
+   6   333   0.62   0.62  0.181  yer ✗
+   7     1   0.86   1.00  0.853  bulut/kısa ✗
+   8     1   0.86   1.00  0.261  bulut/kısa ✗
+   9   962   0.79   0.77  0.144  yer ✗
+  10    19   0.91   1.00  0.276  bulut/kısa ✗
+  11    28   1.00   0.98  0.640  HAVA ✓ (kuyruk -149)
+  12     1   0.94   0.79  0.155  bulut/kısa ✗
+  13   132   0.69   0.51  0.185  yer ✗
+  14   384      -      -      -  hiç geçen örnek yok ✗
+  15   135   0.87   0.93  0.169  HAVA ✓ (kuyruk -293)
+  16  2215   0.59   0.27  0.131  yer ✗
+  17   720   0.68   0.68  0.211  yer ✗
+  18   979   0.91   0.89  0.148  HAVA ✓ (kuyruk -55)
+  19  1755      -      -      -  hiç geçen örnek yok ✗
+  20  1503      -      -      -  hiç geçen örnek yok ✗
+  21   770   0.94   0.88  0.199  HAVA ✓ (kuyruk -91)
+  22   534   0.77   0.63  0.143  yer ✗
+  23   593   0.39   0.54  0.130  yer ✗
+  24   523   0.98   0.96  0.276  HAVA ✓ (kuyruk -62)
+  25   503   0.98   0.98  0.289  HAVA ✓
+  26    41   1.00   1.00  0.531  HAVA ✓
+  27   400   0.88   0.76  0.186  HAVA ✓ (kuyruk -23)
+  28   173   1.00   1.00  0.192  HAVA ✓ (kuyruk -10)
+  29   165      -      -      -  hiç geçen örnek yok ✗
 
-Kabul: 7 drone trajectory (3874 kare-kutu) | Red: 25 bulut
+Kabul: 10 hava trajectory (3634 kare-kutu) | Red: 20
 → data/pseudo/flight_03_clean.csv
-[OK] flight_03 filter (111s)
+[OK] flight_03 filter (107s)
 
 ########## TAMAMLANDI ##########
-   20238 data/pseudo/flight_01_clean.csv
-    9831 data/pseudo/flight_02_clean.csv
-    3875 data/pseudo/flight_03_clean.csv
-   33944 total
+    5716 data/pseudo/flight_01_clean.csv
+    6291 data/pseudo/flight_02_clean.csv
+    3635 data/pseudo/flight_03_clean.csv
+   15642 total

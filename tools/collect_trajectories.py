@@ -36,6 +36,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+# Kanıtlanmış geometri kapıları (lock-integrity işinden): tohum adayının çevre halkası
+# ve ALTI gök olmalı — ağaç tepesi/zemin tohumunu kaynağında keser.
+from filter_trajectories import sky_ring, sky_below
+
 
 # ── ego-hareket telafili hareket tespiti (tohum bulucu) ─────────────────────────
 
@@ -57,10 +61,14 @@ def estimate_global_motion(prev_gray, cur_gray):
     return M
 
 
-def detect_motion_boxes(prev_gray, cur_gray, sky_frac, min_area, max_area):
+def detect_motion_boxes(prev_gray, cur_gray, cur_bgr, seed_sky, seed_below,
+                        min_area, max_area):
     """
     Ego-hareket telafili kare-farkıyla hareketli aday kutular bul.
-    sky_frac: karenin üst bu oranını "gök" kabul et (zemin gürültüsünü ele).
+    GÖK KAPISI (eski sabit sky_frac çizgisi YANLIŞTI: FPV'de kamera yatınca ağaç/zemin
+    karenin üstüne girer → ağaç tohumlanırdı). Doğru test piksel geometrisi:
+      - sky_ring(box)  ≥ seed_sky   → çevre halkası gök (zemin/ufuk tohumunu eler)
+      - sky_below(box) ≥ seed_below → kutunun ALTI gök (göğe uzanan ağaç tepesini eler)
     """
     M = estimate_global_motion(prev_gray, cur_gray)
     if M is None:
@@ -77,7 +85,6 @@ def detect_motion_boxes(prev_gray, cur_gray, sky_frac, min_area, max_area):
                             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
     mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
 
-    sky_limit = int(h * sky_frac)
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     boxes = []
     for c in cnts:
@@ -85,12 +92,15 @@ def detect_motion_boxes(prev_gray, cur_gray, sky_frac, min_area, max_area):
         area = bw * bh
         if area < min_area or area > max_area:
             continue
-        if y + bh > sky_limit:          # zemin/ufuk altı → ele
-            continue
         ar = bw / max(1, bh)
         if ar > 6 or ar < 1 / 6:        # aşırı uzun şeritler (bulut kenarı) → ele
             continue
-        boxes.append((x, y, bw, bh))
+        box = (x, y, bw, bh)
+        if sky_ring(cur_bgr, box) < seed_sky:      # çevresi gök değil → zemin/ufuk
+            continue
+        if sky_below(cur_bgr, box) < seed_below:   # altı gök değil → ağaç tepesi
+            continue
+        boxes.append(box)
 
     # Dedupe (örtüşenleri birleştir) + alana göre azalan sırala: en belirgin
     # bloblar (gerçek hedef olma olasılığı yüksek) önce denensin. Top-N ile sınırla.
@@ -139,8 +149,10 @@ def main():
                     help="Bu kareden kısa trajectory'leri at")
     ap.add_argument("--keep-conf", type=float, default=0.55,
                     help="Takip güveni bunun altına düşerse trajectory'yi bitir")
-    ap.add_argument("--sky-frac", type=float, default=0.75,
-                    help="Karenin üst bu oranı 'gök' (zemin gürültüsünü ele)")
+    ap.add_argument("--seed-sky", type=float, default=0.60,
+                    help="Tohum adayı çevre-halka gök eşiği (zemin/ufuk reddi)")
+    ap.add_argument("--seed-below", type=float, default=0.50,
+                    help="Tohum adayı ALT şerit gök eşiği (ağaç-tepesi reddi)")
     ap.add_argument("--min-area", type=int, default=40)
     ap.add_argument("--max-area", type=int, default=20000)
     ap.add_argument("--start", type=int, default=0, help="Bu kareden başla (seek)")
@@ -214,7 +226,8 @@ def main():
         # 2) periyodik yeni tohum
         if prev_gray is not None and frame_idx % args.seed_every == 0 \
                 and len(active) < args.max_active and not in_excl(frame_idx):
-            cands = detect_motion_boxes(prev_gray, gray, args.sky_frac,
+            cands = detect_motion_boxes(prev_gray, gray, frame,
+                                        args.seed_sky, args.seed_below,
                                         args.min_area, args.max_area)
             # mevcut aktiflere yakın olmayanları tohumla
             active_boxes = [t["rows"][-1][1:5] for t in active if t["rows"]]
