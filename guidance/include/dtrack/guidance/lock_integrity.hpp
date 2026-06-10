@@ -45,5 +45,11 @@ bool size_sane(const cv::Rect& box, const cv::Size& frame_size,
 // (prev_box.area()<=0 ise referans yok → true.)
 bool motion_sane(const cv::Rect& box, const cv::Rect& prev_box, float max_jump_px);
 
+// Kutu içi KENAR YOĞUNLUĞU [0,~1]: Sobel büyüklüğü ortalaması / 255.
+//   Drone silüeti KESKİN kenarlı (yüksek), bulut tutamı YUMUŞAK (düşük) — gök-çevre
+//   ve boyut bandını geçen bulutu reseed'de elemenin tek ayracı (hasat filtresinde
+//   kanıtlandı: drone ~0.12+, bulut-kilidi ~0.05–0.10). Gri/renkli çalışır.
+float edge_density(const cv::Mat& frame, const cv::Rect& box);
+
 }  // namespace lock_integrity
 }  // namespace dtrack

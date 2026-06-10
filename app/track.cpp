@@ -92,6 +92,9 @@ struct Args {
     // SEARCH'te aday varsa nişangah MERKEZİNE en yakın adayı otomatik kilitle.
     // -1 = kapalı (GUI'de manuel seçim). dump modunda spike ölçümü için kullanılır.
     int    auto_lock_at = -1;
+    // Kontrollü deney: auto-lock merkeze değil bu piksele en yakın adayı kilitler
+    // (örn. kasıtlı YER kilidi atıp sky-ekseninin ateşlediğini kanıtlamak için).
+    cv::Point auto_lock_px{-1, -1};
     int    start_frame  = 0;   // video bu kareden başlat (seek)
     // LOCK-INTEGRITY: kilit-sonrası geometrik bütünlük bekçisi (sky-ring+boyut+hareket).
     // Varsayılan AÇIK. --no-integrity ile kapat (A/B ölçümü; yalnız-güven eski davranış).
@@ -146,6 +149,10 @@ Args parse_args(int argc, char** argv) {
         else if (s == "--nano-backbone" && i + 1 < argc) a.nano_backbone = argv[++i];
         else if (s == "--nano-head"     && i + 1 < argc) a.nano_head     = argv[++i];
         else if (s == "--auto-lock"     && i + 1 < argc) a.auto_lock_at  = std::stoi(argv[++i]);
+        else if (s == "--auto-lock-px"  && i + 1 < argc) {
+            int x, y;
+            if (std::sscanf(argv[++i], "%d,%d", &x, &y) == 2) a.auto_lock_px = {x, y};
+        }
         else if (s == "--no-integrity")                  a.use_integrity = 0;
         else if (s == "--start"         && i + 1 < argc) a.start_frame   = std::stoi(argv[++i]);
         else if (!s.empty() && s[0] != '-' && !pset) { a.prefix = s; pset = true; }
@@ -281,6 +288,7 @@ int main(int argc, char** argv) {
     // pencere. Cue deseni gibi BİR KARE GECİKMELİ uygulanır (detect, on_frame'den önce
     // koşar): bu kare hesaplanan ROI bir sonraki karenin detector'ına verilir.
     cv::Rect guided_roi;
+    bool auto_lock_done = false;  // tek-atımlık pilot simülasyonu (bir kez kilitle)
 
     dtrack::Frame frame, warped;
     while (video.next(frame)) {
@@ -355,13 +363,19 @@ int main(int argc, char** argv) {
             // tracker devre dışı (kilit-sonrası görsel takip tek hedefe odaklanır).
             guide.on_frame(warped.image, dets, gout);
             mouse.cands = gout.candidates;   // fare seçimi en son adaylara bakar
-            // "Pilot" simülasyonu (headless A/B): kareden itibaren SEARCH'te aday
-            // varsa nişangah merkezine en yakın adayı otomatik kilitle.
-            if (args.auto_lock_at >= 0 && (int)frame.id >= args.auto_lock_at &&
+            // "Pilot" simülasyonu (headless A/B): kareden itibaren SEARCH'te aday varsa
+            // hedef noktaya (vars. nişangah merkezi; --auto-lock-px ile özel piksel) en
+            // yakın adayı otomatik kilitle. TEK ATIMLIK: pilot bir kez seçer — kilit
+            // sonradan düşerse sim YENİDEN kilitlemez (önceki davranış release sonrası
+            // boş-gök gürültüsüne kilitlenip ölçümü kirletiyordu).
+            if (args.auto_lock_at >= 0 && !auto_lock_done &&
+                (int)frame.id >= args.auto_lock_at &&
                 gout.state == dtrack::GuidanceController::State::Search &&
                 !gout.candidates.empty()) {
                 const cv::Size fsz = warped.image.size();
-                const cv::Point2f ctr(fsz.width * 0.5f, fsz.height * 0.5f);
+                const cv::Point2f ctr = (args.auto_lock_px.x >= 0)
+                    ? cv::Point2f(args.auto_lock_px)
+                    : cv::Point2f(fsz.width * 0.5f, fsz.height * 0.5f);
                 int best = 0; float best_d2 = 1e18f;
                 for (int i = 0; i < (int)gout.candidates.size(); ++i) {
                     const cv::Point2f c = gout.candidates[i].centroid;
@@ -369,6 +383,7 @@ int main(int argc, char** argv) {
                     if (d2 < best_d2) { best_d2 = d2; best = i; }
                 }
                 guide.select(best);
+                auto_lock_done = true;    // tek atımlık: bayrak tüketildi
             }
             // Bir sonraki kare için dar-ROI: TRACK/SUSPECT'te hedef-takipli pencere,
             // SEARCH'te boş (→ merkezi nişangaha geri dön).

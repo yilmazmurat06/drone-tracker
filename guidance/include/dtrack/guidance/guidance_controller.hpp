@@ -58,9 +58,14 @@ public:
         bool  use_integrity  = true;  // false → tam eski davranış (yalnız güven)
         float sky_ring_min   = 0.55f; // kutu çevre halkası gök oranı bunun altı → yere sürüklenme
         float max_area_frac  = 0.08f; // kutu kare alanının bu kadarından büyükse → patlama
-        float max_growth     = 4.0f;  // kilit kutusuna göre >bu kat büyüme → patlama
+        float max_growth     = 2.5f;  // kilit kutusuna göre >bu kat büyüme → patlama
+                                      // (4'tü; ölçümde sürüklenme zeplin afişine ATLADIKTAN
+                                      // sonra yakalanıyordu → erken yakalama için sıkıldı)
         float max_jump_frac  = 0.5f;  // merkez sıçraması > bu × ROI-yan → ışınlanma
         float roi_margin     = 2.0f;  // dar işlem penceresi = bu × max(kutu en/boy)
+        float verify_edge_min = 0.10f;// reseed adayı kenar yoğunluğu eşiği — gök-çevre +
+                                      // boyut bandını GEÇEN bulut tutamını eler (bulut
+                                      // yumuşak, drone keskin; yalnız re-acquire'da)
     };
 
     // Tracker (NPU-hedefli) ve discriminator (CPU) dışarıdan enjekte edilir.
@@ -112,6 +117,9 @@ private:
 
     cv::Rect              prev_box_;            // bir önceki kutu (hareket sağlığı için)
     cv::Rect              lock_box0_;           // kilit/yeniden-tohum anındaki kutu (büyüme referansı)
+    cv::Rect              last_good_box_;       // integrity GEÇEN son kutu — re-acquire ÇAPASI.
+                                                // Sürüklenmiş target_ değil, "en son nerede
+                                                // sağlam gördüm" noktası aranır.
     float                 last_sky_ = 1.f;      // son ölçülen gök-çevre oranı (HUD)
     const char*           last_reason_ = "";    // son bütünlük-düşüş ekseni (HUD)
 

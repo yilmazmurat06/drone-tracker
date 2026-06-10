@@ -54,9 +54,26 @@ bool size_sane(const cv::Rect& box, const cv::Size& frame_size,
     const double frame_area = static_cast<double>(frame_size.width) * frame_size.height;
     const double area = static_cast<double>(box.width) * box.height;
     if (frame_area > 0 && area > max_area_frac * frame_area) return false;  // tüm kareyi kaplıyor
-    const double area0 = static_cast<double>(lock_box0.width) * lock_box0.height;
+    double area0 = static_cast<double>(lock_box0.width) * lock_box0.height;
+    // MİNİK kutu tabanı: 5×4 gibi benek kilidinde oran aşırı hassas olur (tracker'ın
+    // ~10×10 minimumu bile "5× büyüme" sayılır); uzak gerçek hedefin doğal kutu
+    // titreşimi de yanlış alarm verir. Referansı en az 20×20 (400 px²) kabul et.
+    if (area0 > 0) area0 = std::max(area0, 400.0);
     if (area0 > 0 && area > max_growth * area0) return false;               // kilitten beri patladı
     return true;
+}
+
+float edge_density(const cv::Mat& frame, const cv::Rect& box) {
+    const cv::Rect r = box & cv::Rect(0, 0, frame.cols, frame.rows);
+    if (r.area() <= 0) return 0.f;
+    cv::Mat gray;
+    if (frame.channels() == 3) cv::cvtColor(frame(r), gray, cv::COLOR_BGR2GRAY);
+    else                       gray = frame(r);
+    cv::Mat gx, gy, mag;
+    cv::Sobel(gray, gx, CV_32F, 1, 0);
+    cv::Sobel(gray, gy, CV_32F, 0, 1);
+    cv::magnitude(gx, gy, mag);
+    return static_cast<float>(cv::mean(mag)[0]) / 255.f;
 }
 
 bool motion_sane(const cv::Rect& box, const cv::Rect& prev_box, float max_jump_px) {

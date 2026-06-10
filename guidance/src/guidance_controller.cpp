@@ -10,15 +10,6 @@
 
 namespace dtrack {
 
-namespace {
-// İki kutunun kesişim/birleşim oranı (IoU) ∈ [0,1].
-float iou(const cv::Rect& a, const cv::Rect& b) {
-    const float inter = static_cast<float>((a & b).area());
-    const float uni   = static_cast<float>(a.area() + b.area()) - inter;
-    return uni > 0.f ? inter / uni : 0.f;
-}
-}  // namespace
-
 GuidanceController::GuidanceController(ISingleTargetTracker& tracker,
                                       IDiscriminator& verifier,
                                       Params p)
@@ -32,6 +23,7 @@ void GuidanceController::release() {
     suspect_count_  = 0;
     prev_box_       = cv::Rect();
     lock_box0_      = cv::Rect();
+    last_good_box_  = cv::Rect();
 }
 
 // Hedefi izleyen dar işlem penceresi: kutuyu merkez alıp roi_margin× büyüt, kareye kırp.
@@ -77,24 +69,43 @@ void GuidanceController::select(int candidate_index) {
     needs_init_     = true;
     lock_box0_      = target_;       // büyüme referansı = kilit anındaki kutu
     prev_box_       = cv::Rect();    // hareket referansı yok (ilk kare atlanır)
+    last_good_box_  = target_;       // re-acquire çapası kilit noktasından başlar
 }
 
 bool GuidanceController::verify_target(const cv::Mat& frame,
                                        const std::vector<Detection>& cands,
                                        Detection* matched) const {
-    // Takip kutusuyla en çok örtüşen, drone-skoru yeterli adayı bul.
-    float best_iou = 0.f; const Detection* best = nullptr;
+    // ÇAPALI re-acquire: sürüklenmiş target_ ile örtüşme ARANMAZ (tracker zaten yanlış
+    // yerde olabilir). Arama "en son SAĞLAM gördüğüm" noktaya (last_good_box_) çapalanır.
+    const cv::Rect& anchor = last_good_box_.area() > 0 ? last_good_box_ : target_;
+    if (anchor.area() <= 0) return false;
+    const cv::Point2f ac(anchor.x + anchor.width * 0.5f, anchor.y + anchor.height * 0.5f);
+    const float radius = p_.roi_margin * std::max(anchor.width, anchor.height);
+
+    // Boyut bandı: aday, kilit kutusunun [1/max_growth, max_growth] alan bandında olmalı
+    // → ne dev zeplin/sahne bloğu ne minik gürültü blobu yeniden tohumlanır.
+    const double area0 = static_cast<double>(lock_box0_.area());
+
+    float best_d = radius; const Detection* best = nullptr;
     for (const auto& d : cands) {
-        const float ov = iou(d.bbox, target_);
-        if (ov > best_iou) { best_iou = ov; best = &d; }
+        if (d.score < p_.verify_score) continue;                       // P3 drone-luk
+        const cv::Point2f c(d.bbox.x + d.bbox.width * 0.5f,
+                            d.bbox.y + d.bbox.height * 0.5f);
+        const float dist = static_cast<float>(cv::norm(c - ac));
+        if (dist > radius || dist >= best_d) continue;                 // çapa yarıçapı + en yakın
+        if (p_.use_integrity) {
+            const double a = static_cast<double>(d.bbox.area());
+            if (area0 > 0 && (a > p_.max_growth * area0 ||
+                              a * p_.max_growth < area0)) continue;    // boyut bandı dışı
+            if (frame.channels() == 3 &&
+                lock_integrity::sky_ring(frame, d.bbox) < p_.sky_ring_min)
+                continue;                                              // gök-çevresiz (yer) aday
+            if (lock_integrity::edge_density(frame, d.bbox) < p_.verify_edge_min)
+                continue;                                              // yumuşak (bulut) aday
+        }
+        best_d = dist; best = &d;
     }
-    if (!best || best_iou <= 0.f) return false;
-    if (best->score < p_.verify_score) return false;
-    // GÖK-ÇEVRE AND koşulu: aday hem P3'ü geçmeli HEM gök-çevreli olmalı. P3 tek başına
-    // yerdeki clutter'ı geçiriyordu → re-acquire aynı ağaca yeniden kilitlenmesin.
-    if (p_.use_integrity && frame.channels() == 3 &&
-        lock_integrity::sky_ring(frame, best->bbox) < p_.sky_ring_min)
-        return false;
+    if (!best) return false;
     if (matched) *matched = *best;
     return true;
 }
@@ -120,6 +131,8 @@ void GuidanceController::on_frame(const cv::Mat& frame,
         const IntegrityResult ig = p_.use_integrity ? check_integrity(frame, target_)
                                                      : IntegrityResult{};
         last_sky_ = ig.sky; last_reason_ = ig.reason;
+
+        if (ig.ok) last_good_box_ = target_;  // re-acquire çapası: son SAĞLAM konum
 
         if (!ig.ok) {
             // Geometrik sürüklenme/patlama/ışınlanma → tracker'a güvenme, şüpheye geç.
@@ -154,7 +167,8 @@ void GuidanceController::on_frame(const cv::Mat& frame,
             tracker_.init(frame, target_);
             state_ = State::Track;
             low_conf_count_ = 0; suspect_count_ = 0;
-            lock_box0_ = target_;          // büyüme referansını yeniden-tohuma sıfırla
+            lock_box0_     = target_;      // büyüme referansını yeniden-tohuma sıfırla
+            last_good_box_ = target_;      // çapa da taze doğrulanmış konuma taşınır
             last_reason_ = "";
         } else if (r.confidence < p_.lost_conf ||
                    ++suspect_count_ >= p_.reacquire_frames) {

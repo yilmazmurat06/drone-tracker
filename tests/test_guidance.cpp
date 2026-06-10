@@ -6,6 +6,8 @@
 // ============================================================================
 #include <gtest/gtest.h>
 
+#include <opencv2/imgproc.hpp>
+
 #include "dtrack/guidance/guidance_controller.hpp"
 
 using namespace dtrack;
@@ -107,18 +109,22 @@ TEST(Guidance, SuspectReacquiresOnVerify) {
     GuidanceController::Params p; p.lost_conf = 0.3f; p.suspect_conf = 0.5f;
     p.suspect_frames = 1; p.verify_score = 0.5f;
     GuidanceController ctrl(trk, ver, p);
+    // Reseed kalite kapıları (edge) için aday kutusunda KESKİN bir hedef olmalı —
+    // düz gri karede aday "bulut gibi yumuşak" sayılıp elenirdi.
+    cv::Mat frame = kFrame.clone();
+    cv::rectangle(frame, cv::Rect(14, 14, 12, 12), cv::Scalar(255), cv::FILLED);
     std::vector<Detection> cands{make_cand({10, 10, 20, 20}, 0.9f)};
     GuidanceController::Out out;
-    ctrl.on_frame(kFrame, cands, out);
+    ctrl.on_frame(frame, cands, out);
     ctrl.select(0);
 
     trk.next_conf = 0.4f;  trk.next_box = {10, 10, 20, 20};
-    ctrl.on_frame(kFrame, {}, out);             // → SUSPECT
+    ctrl.on_frame(frame, {}, out);             // → SUSPECT
     ASSERT_EQ(out.state, GuidanceController::State::Suspect);
 
     const int before = trk.init_calls;
-    // Takip kutusuyla örtüşen, yüksek skorlu aday → doğrulanır.
-    ctrl.on_frame(kFrame, cands, out);
+    // Çapaya yakın, yüksek skorlu, keskin aday → doğrulanır.
+    ctrl.on_frame(frame, cands, out);
     EXPECT_EQ(out.state, GuidanceController::State::Track);
     EXPECT_EQ(trk.init_calls, before + 1);      // yeniden tohumlandı
 }
@@ -178,6 +184,90 @@ TEST(Guidance, HighSkyRingStaysTracking) {
     EXPECT_EQ(out.state, GuidanceController::State::Track);
     EXPECT_GT(out.sky, 0.9f);
     EXPECT_TRUE(out.roi.area() > 0);  // TRACK'te dar işlem penceresi üretiliyor
+}
+
+// ÇAPALI RE-ACQUIRE: tracker ışınlanınca (motion-fail → SUSPECT) doğrulama,
+// sürüklenmiş kutuya örtüşen adayı DEĞİL, son-sağlam konuma (çapa) yakın adayı seçer.
+TEST(Guidance, ReacquireAnchoredAtLastGoodNotDriftedBox) {
+    FakeTracker trk; FakeVerifier ver;
+    GuidanceController ctrl(trk, ver);
+    cv::Mat sky(720, 1280, CV_8UC3, cv::Scalar(235, 170, 90));
+    // İki aday konumuna da KESKİN hedef çiz (edge kapısı); ayrım UZAKLIKTAN gelsin.
+    cv::rectangle(sky, cv::Rect(320, 238, 20, 20), cv::Scalar(35, 35, 35), cv::FILLED);
+    cv::rectangle(sky, cv::Rect(610, 510, 20, 20), cv::Scalar(35, 35, 35), cv::FILLED);
+    std::vector<Detection> cands{make_cand({300, 220, 40, 40}, 0.9f)};
+    GuidanceController::Out out;
+    ctrl.on_frame(sky, cands, out);
+    ctrl.select(0);
+
+    trk.next_conf = 0.9f; trk.next_box = {300, 220, 40, 40};
+    ctrl.on_frame(sky, {}, out);                  // sağlam TRACK karesi → çapa burada
+    ASSERT_EQ(out.state, GuidanceController::State::Track);
+
+    trk.next_box = {600, 500, 40, 40};            // ışınlanma (~410px sıçrama)
+    ctrl.on_frame(sky, {}, out);                  // motion-fail → SUSPECT
+    ASSERT_EQ(out.state, GuidanceController::State::Suspect);
+    EXPECT_STREQ(out.integrity_reason, "motion");
+
+    // Aday A: sürüklenmiş kutuyla örtüşür (eski IoU mantığı bunu seçerdi) — çapadan uzak.
+    // Aday B: çapaya yakın → DOĞRU seçim.
+    const int before = trk.init_calls;
+    std::vector<Detection> sus{make_cand({600, 500, 40, 40}, 0.9f),
+                               make_cand({310, 228, 40, 40}, 0.9f)};
+    ctrl.on_frame(sky, sus, out);
+    EXPECT_EQ(out.state, GuidanceController::State::Track);
+    EXPECT_EQ(trk.init_calls, before + 1);
+    EXPECT_EQ(out.target, cv::Rect(310, 228, 40, 40));  // B'ye tohumlandı, A'ya değil
+}
+
+// RE-ACQUIRE BOYUT BANDI: çapaya yakın ama dev (kilit kutusunun >2.5× alanı) aday RED —
+// patlamış kutudan dev sahne bloğuna yeniden kilitlenme engellenir.
+TEST(Guidance, ReacquireRejectsOutOfSizeBand) {
+    FakeTracker trk; FakeVerifier ver;
+    GuidanceController ctrl(trk, ver);
+    cv::Mat sky(720, 1280, CV_8UC3, cv::Scalar(235, 170, 90));
+    std::vector<Detection> cands{make_cand({300, 220, 40, 40}, 0.9f)};
+    GuidanceController::Out out;
+    ctrl.on_frame(sky, cands, out);
+    ctrl.select(0);
+
+    trk.next_conf = 0.9f; trk.next_box = {300, 220, 40, 40};
+    ctrl.on_frame(sky, {}, out);                  // sağlam TRACK → çapa
+    trk.next_box = {600, 500, 40, 40};
+    ctrl.on_frame(sky, {}, out);                  // ışınlanma → SUSPECT
+    ASSERT_EQ(out.state, GuidanceController::State::Suspect);
+
+    // Çapaya yakın merkezli ama 200×200 dev aday (alan 25× kilit) → reseed YOK.
+    std::vector<Detection> sus{make_cand({220, 140, 200, 200}, 0.9f)};
+    const int before = trk.init_calls;
+    ctrl.on_frame(sky, sus, out);
+    EXPECT_EQ(out.state, GuidanceController::State::Suspect);
+    EXPECT_EQ(trk.init_calls, before);
+}
+
+// RE-ACQUIRE KENAR KAPISI: çapaya yakın, boyutu uygun, gök-çevreli ama YUMUŞAK
+// (kenarsız = bulut tutamı) aday RED — geometri bulutu ayıramaz, keskinlik ayırır.
+TEST(Guidance, ReacquireRejectsSoftCloudCandidate) {
+    FakeTracker trk; FakeVerifier ver;
+    GuidanceController ctrl(trk, ver);
+    cv::Mat sky(720, 1280, CV_8UC3, cv::Scalar(235, 170, 90));  // düz gök — aday içi kenarsız
+    std::vector<Detection> cands{make_cand({300, 220, 40, 40}, 0.9f)};
+    GuidanceController::Out out;
+    ctrl.on_frame(sky, cands, out);
+    ctrl.select(0);
+
+    trk.next_conf = 0.9f; trk.next_box = {300, 220, 40, 40};
+    ctrl.on_frame(sky, {}, out);                  // çapa
+    trk.next_box = {600, 500, 40, 40};
+    ctrl.on_frame(sky, {}, out);                  // ışınlanma → SUSPECT
+    ASSERT_EQ(out.state, GuidanceController::State::Suspect);
+
+    // Çapa dibinde, boyut bandında, gök-çevreli ama DÜZ (edge≈0) aday → reseed YOK.
+    std::vector<Detection> sus{make_cand({305, 224, 40, 40}, 0.9f)};
+    const int before = trk.init_calls;
+    ctrl.on_frame(sky, sus, out);
+    EXPECT_EQ(out.state, GuidanceController::State::Suspect);
+    EXPECT_EQ(trk.init_calls, before);
 }
 
 // release() her durumdan SEARCH'e döner.
