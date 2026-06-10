@@ -19,3 +19,12 @@ demo_output.mp4
 
 # NN model dosyalari (indirilir, repoya girmez)
 models/
+
+# --- ML (YOLO) üretilen ağırlık/onnx (regenerable; yaml + script repoda) ---
+ml/onnx/
+ml/runs/
+ml/datasets/
+*.pt
+*.onnx
+*.engine
+ultralytics/
